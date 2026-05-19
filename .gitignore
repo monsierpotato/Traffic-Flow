@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-gpu/
+venv/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Benchmark data and generated outputs
+data/raw_videos/*.mp4
+data/frames/
+data/samples_public/
+benchmark_results/outputs/**/*.mp4
+benchmark_results/outputs/**/*.avi
+benchmark_results/outputs/**/*.mov
+benchmark_results/outputs/**/*.jsonl
+
+# External cloned model repos
+repos/
+weights/
