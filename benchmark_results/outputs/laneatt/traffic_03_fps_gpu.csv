@@ -1,0 +1,2 @@
+method,video,frames,avg_latency_ms,avg_inference_ms,p50_latency_ms,p95_latency_ms,fps
+LaneATT-ResNet18-TuSimple,data\raw_videos\traffic_03_night_time_lapse.mp4,308,7.663,3.964,7.488,10.449,130.5

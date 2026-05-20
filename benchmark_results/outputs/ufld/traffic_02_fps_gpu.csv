@@ -1,0 +1,2 @@
+method,video,frames,avg_latency_ms,p50_latency_ms,p95_latency_ms,fps
+UFLD-Tusimple-Res18,data\raw_videos\traffic_02_clouds_highway.mp4,587,3.226,3.142,4.146,309.98

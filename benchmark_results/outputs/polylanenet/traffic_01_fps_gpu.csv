@@ -1,0 +1,2 @@
+method,video,frames,avg_latency_ms,avg_inference_ms,p50_latency_ms,p95_latency_ms,fps
+PolyLaneNet-ResNet50-TuSimple,data\raw_videos\traffic_01_time_lapse.mp4,632,9.419,4.897,9.414,9.903,106.17
