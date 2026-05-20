@@ -1,0 +1,2 @@
+method,video,frames,avg_latency_ms,p50_latency_ms,p95_latency_ms,fps
+UFLD-Tusimple-Res18,data\raw_videos\traffic_01_time_lapse.mp4,632,3.185,3.068,4.067,313.92
