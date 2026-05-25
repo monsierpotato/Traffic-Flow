@@ -1,4 +1,4 @@
 "method","video","frames","avg_latency_ms","avg_inference_ms","p50_latency_ms","p95_latency_ms","fps"
-"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_01_time_lapse.mp4","632","8.158","3.932","8.018","10.388","122.58"
-"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_02_clouds_highway.mp4","587","7.271","3.871","7.422","8.707","137.53"
-"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_03_night_time_lapse.mp4","308","7.663","3.964","7.488","10.449","130.5"
+"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_01_time_lapse.mp4","632","7.112","2.918","6.859","8.914","140.60"
+"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_02_clouds_highway.mp4","587","6.413","2.770","6.471","7.446","155.94"
+"LaneATT-ResNet18-TuSimple","data\raw_videos\traffic_03_night_time_lapse.mp4","308","6.720","2.818","6.661","8.811","148.80"

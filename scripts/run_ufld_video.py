@@ -71,8 +71,11 @@ class UFLDVideoRunner:
 
     def infer(self, frame, video_id, frame_id):
         image_height, image_width = frame.shape[:2]
+
+        preprocess_start = time.perf_counter()
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         tensor = self.transform(Image.fromarray(rgb)).unsqueeze(0).to(self.device)
+        preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
 
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
@@ -83,13 +86,22 @@ class UFLDVideoRunner:
             torch.cuda.synchronize(self.device)
         inference_ms = (time.perf_counter() - start) * 1000.0
 
+        postprocess_start = time.perf_counter()
         lanes = self._decode_lanes(output, image_width, image_height)
+        postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
+        total_ms = preprocess_ms + inference_ms + postprocess_ms
         return LaneFrameResult(
             video_id=video_id,
             frame_id=frame_id,
             method="UFLD-Tusimple-Res18" if self.dataset == "Tusimple" else "UFLD-CULane-Res18",
             lanes=lanes,
-            runtime=RuntimeInfo(inference_ms=inference_ms, total_ms=inference_ms),
+            runtime=RuntimeInfo(
+                preprocess_ms=preprocess_ms,
+                inference_ms=inference_ms,
+                postprocess_ms=postprocess_ms,
+                total_ms=total_ms,
+                fps=1000.0 / total_ms if total_ms > 0 else 0.0,
+            ),
             meta={"image_width": image_width, "image_height": image_height},
         )
 
