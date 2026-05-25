@@ -15,10 +15,19 @@ Thumbs.db
 data/raw_videos/*.mp4
 data/frames/
 data/samples_public/
+data/kaggle_downloads/
+data/tusimple_full_test/
+data/tusimple_real_smoke/
+data/tusimple_smoke/
 benchmark_results/outputs/**/*.mp4
 benchmark_results/outputs/**/*.avi
 benchmark_results/outputs/**/*.mov
 benchmark_results/outputs/**/*.jsonl
+benchmark_results/outputs/**/overlays/
+benchmark_results/outputs/**/*.jpg
+benchmark_results/outputs/**/*.png
+kaggle.json
+**/access_token
 
 # External cloned model repos
 repos/

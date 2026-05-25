@@ -1,2 +1,2 @@
 method,video,frames,avg_latency_ms,avg_inference_ms,p50_latency_ms,p95_latency_ms,fps
-LaneATT-ResNet18-TuSimple,data\raw_videos\traffic_02_clouds_highway.mp4,587,7.271,3.871,7.422,8.707,137.53
+LaneATT-ResNet18-TuSimple,data\raw_videos\traffic_02_clouds_highway.mp4,587,6.413,2.77,6.471,7.446,155.94

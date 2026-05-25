@@ -1,2 +1,2 @@
 method,video,frames,avg_latency_ms,avg_inference_ms,p50_latency_ms,p95_latency_ms,fps
-LaneATT-ResNet18-TuSimple,data\raw_videos\traffic_01_time_lapse.mp4,632,8.158,3.932,8.018,10.388,122.58
+LaneATT-ResNet18-TuSimple,data\raw_videos\traffic_01_time_lapse.mp4,632,7.112,2.918,6.859,8.914,140.6
