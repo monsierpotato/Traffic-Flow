@@ -1,64 +1,71 @@
-# TrafficFlow Lane Benchmark
+# TrafficFlow Manual Counting
 
-Workspace benchmark 3 hướng lane detection cho TrafficFlow:
+TrafficFlow dùng manual geometry cho lane/counting configuration:
 
-- UFLD / UFLDv2: speed baseline.
-- LaneATT: candidate cân bằng cho prototype.
-- CondLaneNet-small / medium: candidate cho cảnh phức tạp.
+- Phase A: `trafficflow.cli.config_generator` lấy một frame từ video và cho người dùng vẽ line/zone/gate bằng chuột.
+- Phase B: `trafficflow.cli.run_counting` chạy YOLOv8 + ByteTrack, lấy bottom-center của bbox, kiểm tra giao cắt hình học và đếm xe.
+
+Benchmark lane detection cũ được giữ trong `old_benchmark/` để tham khảo.
 
 ## Quick Start
 
-```bash
-pip install -r requirements-base.txt
-python scripts/collect_system_info.py
-python scripts/extract_frames.py data/raw_videos/traffic_01.mp4 data/frames/traffic_01 --step 30
-python scripts/benchmark_fps.py --video data/raw_videos/traffic_01.mp4 --method noop --max-frames 300
+Tạo config thủ công cho một camera/video:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m trafficflow.cli.config_generator --video "data\raw\danang\Cầu Rồng.mp4" --output configs\danang\cau_rong_manual.json --camera-id danang_cau_rong --frame-index 150 --display-max-size 1280
+```
+
+Chạy Phase B:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m trafficflow.cli.run_counting --video "data\raw\danang\Cầu Rồng.mp4" --config configs\danang\cau_rong_manual.json --model models\yolov8n.pt --device 0 --output-video outputs\danang\cau_rong\counted.mp4 --output-jsonl outputs\danang\cau_rong\events.jsonl
+```
+
+Test nhanh một đoạn ngắn:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m trafficflow.cli.run_counting --video "data\raw\danang\Cầu Rồng.mp4" --config configs\danang\cau_rong_manual.json --model models\yolov8n.pt --device 0 --max-frames 300 --output-video outputs\danang\cau_rong\test.mp4 --output-jsonl outputs\danang\cau_rong\test_events.jsonl
+```
+
+## Configurator Controls
+
+- `1`: Counting line per lane, click 2 điểm cho mỗi lane.
+- `2`: Global segment, click 2 điểm toàn mặt đường rồi nhập số lane.
+- `3`: Short lane zone, click 4 điểm polygon rồi 2 điểm counting line.
+- `4`: Counting gate, click 4 điểm polygon, 2 điểm counting line, 2 điểm direction arrow.
+- `Enter`: lưu JSON.
+- `R`: xóa các điểm đang click dở.
+- `Esc`: thoát không lưu.
+
+## Project Layout
+
+```text
+trafficflow/      Python package: CLI, detector, counting, geometry
+configs/         Manual geometry configs grouped by dataset/camera
+data/            Local raw videos and samples (ignored by git)
+outputs/         Generated videos, JSONL events, debug frames (ignored by git)
+models/          Local YOLO weights (ignored by git)
+scripts/         Batch/debug helper scripts
+tests/           Focused unit tests for counting and geometry
+old_benchmark/   Archived lane-detection benchmark work
+```
+
+## Useful Scripts
+
+```powershell
+.\.venv-gpu\Scripts\python.exe scripts\smoke_test_manual_counting.py
+.\.venv-gpu\Scripts\python.exe scripts\extract_preview_frames.py --data-dir data\raw\danang --output-dir outputs\debug\preview_frames
+.\.venv-gpu\Scripts\python.exe scripts\batch_danang_smoke.py --config configs\danang\cau_rong_manual.json
 ```
 
 ## GPU Environment
 
 This project has a local GPU venv at `.venv-gpu` using Python 3.10 and PyTorch CUDA 13.0 wheels.
 
-```bash
+```powershell
 py -3.10 -m venv .venv-gpu
 .\.venv-gpu\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
 .\.venv-gpu\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-gpu.txt
 .\.venv-gpu\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
-
-CUDA Toolkit and MSVC Build Tools were installed with:
-
-```bash
-winget install -e --id Nvidia.CUDA --accept-package-agreements --accept-source-agreements
-winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements --override "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-```
-
-For commands that compile CUDA extensions, use the Visual C++ build environment:
-
-```bash
-cmd /c ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && set DISTUTILS_USE_SDK=1 && set CUDA_HOME=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2 && set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2 && .venv-gpu\Scripts\python.exe setup.py install"
-```
-
-If importing a custom CUDA extension fails with a DLL load error, make sure the current shell can see CUDA and PyTorch DLLs:
-
-```powershell
-$env:CUDA_HOME = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
-$env:CUDA_PATH = $env:CUDA_HOME
-$env:Path = "$env:CUDA_HOME\bin;$PWD\.venv-gpu\Lib\site-packages\torch\lib;$env:Path"
-```
-
-Run UFLD on GPU:
-
-```bash
-.\.venv-gpu\Scripts\python.exe scripts/run_ufld_video.py --weights weights/ufld_tusimple_18.pth --video data/raw_videos/traffic_01_time_lapse.mp4 --output-video benchmark_results/outputs/ufld/traffic_01_overlay_gpu.mp4 --output-csv benchmark_results/outputs/ufld/traffic_01_fps_gpu.csv --output-jsonl benchmark_results/outputs/ufld/traffic_01_lanes_gpu.jsonl --device cuda
-```
-
-Output chính nằm trong:
-
-```text
-benchmark_results/
-trafficflow_integration/
-```
-
-Repo model bên thứ ba nên clone vào `repos/`, mỗi method có wrapper riêng trong `scripts/run_*.py`.
