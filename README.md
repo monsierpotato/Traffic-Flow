@@ -15,6 +15,12 @@ Tạo config thủ công cho một camera/video:
 .\.venv-gpu\Scripts\python.exe -m trafficflow.cli.config_generator --video "data\raw\danang\Cầu Rồng.mp4" --output configs\danang\cau_rong_manual.json --camera-id danang_cau_rong --frame-index 150 --display-max-size 1280
 ```
 
+Tạo config bằng rectangular annotation ROI để vẽ lane trên vùng crop:
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m trafficflow.cli.config_generator --video "data\raw\danang\Cầu Rồng.mp4" --output configs\danang\cau_rong_manual.json --camera-id danang_cau_rong --frame-index 150 --select-roi
+```
+
 Chạy Phase B:
 
 ```powershell
@@ -64,6 +70,9 @@ old_benchmark/    Archived lane-detection benchmark work
 `trafficflow.cli.run_counting` is intentionally a thin wrapper. The reusable AI workflow now lives in
 `trafficflow.runtime.engine`, so future API and worker code can call the same processing path without
 depending on CLI argument parsing.
+
+Lane drawing can use an optional frontend-only annotation crop. See
+`docs/contracts/annotation_roi.md` and `docs/contracts/lane_config_with_annotation_roi.json`.
 
 ## Useful Scripts
 

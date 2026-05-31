@@ -4,9 +4,11 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
+
+from trafficflow.geometry.roi import AnnotationRoi, ImageSize, cropped_display_point_to_source
 
 Point = Tuple[int, int]
 
@@ -19,9 +21,18 @@ METHODS = {
 
 
 class ConfigSession:
-    def __init__(self, frame, output_path: Path, camera_id: str, display_max_size: int):
+    def __init__(
+        self,
+        frame,
+        output_path: Path,
+        camera_id: str,
+        display_max_size: int,
+        annotation_roi: Optional[AnnotationRoi] = None,
+    ):
         self.frame = frame
-        self.display_frame, self.display_scale = _make_display_frame(frame, display_max_size)
+        self.annotation_roi = annotation_roi
+        self.annotation_frame = _crop_frame(frame, annotation_roi) if annotation_roi else frame
+        self.display_frame, self.display_scale = _make_display_frame(self.annotation_frame, display_max_size)
         self.output_path = output_path
         self.camera_id = camera_id
         self.method_key = "1"
@@ -30,6 +41,8 @@ class ConfigSession:
         self.ready_to_finalize = False
         self.needs_final_render = False
         self.message = "Press 1-4 to choose method. Click points, Enter saves."
+        if self.annotation_roi:
+            self.message = "ROI annotation mode. Press 1-4, click points, Enter saves."
 
     @property
     def method(self) -> str:
@@ -137,8 +150,8 @@ class ConfigSession:
     def render(self):
         canvas = self.display_frame.copy()
         for lane in self.lanes:
-            _draw_lane(canvas, _scale_lane(lane, self.display_scale))
-        _draw_pending(canvas, [_scale_point(point, self.display_scale) for point in self.points], self.method_key)
+            _draw_lane(canvas, self._to_display_lane(lane))
+        _draw_pending(canvas, [self._to_display_point(point) for point in self.points], self.method_key)
         cv2.putText(canvas, self.message, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 240, 255), 2)
         cv2.putText(canvas, f"Method {self.method_key}: {self.method}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 240, 255), 2)
         return canvas
@@ -159,11 +172,45 @@ class ConfigSession:
             },
             "lanes": self.lanes,
         }
+        if self.annotation_roi:
+            payload["annotation_roi"] = {
+                "type": "rectangle",
+                "x": round(self.annotation_roi.x),
+                "y": round(self.annotation_roi.y),
+                "width": round(self.annotation_roi.width),
+                "height": round(self.annotation_roi.height),
+                "purpose": "frontend_annotation_only",
+            }
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def _to_source_point(self, x: int, y: int) -> Point:
+        if self.annotation_roi:
+            point = cropped_display_point_to_source(
+                (x, y),
+                display_size=ImageSize(
+                    width=self.display_frame.shape[1],
+                    height=self.display_frame.shape[0],
+                ),
+                roi=self.annotation_roi,
+            )
+            return (round(point[0]), round(point[1]))
         return (round(x / self.display_scale), round(y / self.display_scale))
+
+    def _to_display_point(self, point: Point) -> Point:
+        if self.annotation_roi:
+            return (
+                round((point[0] - self.annotation_roi.x) * self.display_scale),
+                round((point[1] - self.annotation_roi.y) * self.display_scale),
+            )
+        return _scale_point(point, self.display_scale)
+
+    def _to_display_lane(self, lane: dict) -> dict:
+        scaled = dict(lane)
+        for key in ("valid_zone", "counting_line", "direction"):
+            if lane.get(key):
+                scaled[key] = [list(self._to_display_point(tuple(point))) for point in lane[key]]
+        return scaled
 
 
 def _interpolate(start: Point, end: Point, ratio: float) -> Point:
@@ -178,6 +225,14 @@ def _make_display_frame(frame, display_max_size: int):
     if scale >= 1.0:
         return frame, 1.0
     return cv2.resize(frame, (round(width * scale), round(height * scale))), scale
+
+
+def _crop_frame(frame, annotation_roi: AnnotationRoi):
+    x = round(annotation_roi.x)
+    y = round(annotation_roi.y)
+    width = round(annotation_roi.width)
+    height = round(annotation_roi.height)
+    return frame[y : y + height, x : x + width]
 
 
 def _scale_point(point: Point, scale: float) -> Point:
@@ -227,6 +282,44 @@ def read_frame(video_path: Path, frame_index: int):
     return frame
 
 
+def parse_annotation_roi(value: str) -> AnnotationRoi:
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError("ROI must use format x,y,width,height")
+    try:
+        x, y, width, height = [float(part) for part in parts]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("ROI values must be numbers") from exc
+    try:
+        return AnnotationRoi(x=x, y=y, width=width, height=height)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def select_annotation_roi(frame, display_max_size: int) -> AnnotationRoi:
+    preview, scale = _make_display_frame(frame, display_max_size)
+    window = "Select rectangular ROI, then press Enter"
+    x, y, width, height = cv2.selectROI(window, preview, showCrosshair=True, fromCenter=False)
+    cv2.destroyWindow(window)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("No ROI selected.")
+    return AnnotationRoi(
+        x=x / scale,
+        y=y / scale,
+        width=width / scale,
+        height=height / scale,
+    )
+
+
+def validate_annotation_roi(roi: AnnotationRoi, frame) -> AnnotationRoi:
+    height, width = frame.shape[:2]
+    if roi.x < 0 or roi.y < 0:
+        raise ValueError(f"ROI origin must be non-negative: {roi}")
+    if roi.x + roi.width > width or roi.y + roi.height > height:
+        raise ValueError(f"ROI exceeds frame bounds {width}x{height}: {roi}")
+    return roi
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive manual geometry config generator.")
     parser.add_argument("--video", required=True, type=Path)
@@ -234,12 +327,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-id", default="camera_01")
     parser.add_argument("--frame-index", default=0, type=int, help="Video frame to use as the drawing background.")
     parser.add_argument("--display-max-size", default=1280, type=int, help="Resize preview so its longest side fits this size; saved coordinates remain in source resolution.")
+    parser.add_argument("--annotation-roi", type=parse_annotation_roi, help="Rectangular drawing ROI as x,y,width,height in source-frame coordinates.")
+    parser.add_argument("--select-roi", action="store_true", help="Select a rectangular drawing ROI interactively before drawing lanes.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    session = ConfigSession(read_frame(args.video, args.frame_index), args.output, args.camera_id, args.display_max_size)
+    frame = read_frame(args.video, args.frame_index)
+    annotation_roi = args.annotation_roi
+    if args.select_roi:
+        if annotation_roi:
+            raise ValueError("Use either --annotation-roi or --select-roi, not both.")
+        annotation_roi = select_annotation_roi(frame, args.display_max_size)
+    if annotation_roi:
+        annotation_roi = validate_annotation_roi(annotation_roi, frame)
+        print(
+            "Using annotation ROI: "
+            f"x={annotation_roi.x:.0f}, y={annotation_roi.y:.0f}, "
+            f"width={annotation_roi.width:.0f}, height={annotation_roi.height:.0f}"
+        )
+    session = ConfigSession(frame, args.output, args.camera_id, args.display_max_size, annotation_roi)
     window = "TrafficFlow Configurator"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(window, session.on_mouse)
