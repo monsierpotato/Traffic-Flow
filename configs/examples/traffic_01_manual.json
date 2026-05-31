@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "camera_id": "traffic_01",
+  "created_at": "2026-05-26T05:27:50.389314+00:00",
+  "resolution": {
+    "width": 640,
+    "height": 360
+  },
+  "method": "counting_gate",
+  "settings": {
+    "movement_threshold_px": 5,
+    "cooldown_frames": 12,
+    "cooldown_distance_px": 32,
+    "zone_policy": "flexible"
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "valid_zone": [
+        [
+          115,
+          266
+        ],
+        [
+          245,
+          355
+        ],
+        [
+          365,
+          352
+        ],
+        [
+          189,
+          261
+        ]
+      ],
+      "counting_line": [
+        [
+          203,
+          324
+        ],
+        [
+          300,
+          320
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          173,
+          270
+        ],
+        [
+          252,
+          333
+        ]
+      ]
+    },
+    {
+      "lane_id": "lane_2",
+      "valid_zone": [
+        [
+          192,
+          261
+        ],
+        [
+          366,
+          352
+        ],
+        [
+          477,
+          349
+        ],
+        [
+          270,
+          260
+        ]
+      ],
+      "counting_line": [
+        [
+          304,
+          317
+        ],
+        [
+          400,
+          316
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          260,
+          276
+        ],
+        [
+          374,
+          330
+        ]
+      ]
+    }
+  ]
+}
