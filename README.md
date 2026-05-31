@@ -40,15 +40,30 @@ Test nhanh một đoạn ngắn:
 ## Project Layout
 
 ```text
-trafficflow/      Python package: CLI, detector, counting, geometry
-configs/         Manual geometry configs grouped by dataset/camera
-data/            Local raw videos and samples (ignored by git)
-outputs/         Generated videos, JSONL events, debug frames (ignored by git)
-models/          Local YOLO weights (ignored by git)
-scripts/         Batch/debug helper scripts
-tests/           Focused unit tests for counting and geometry
-old_benchmark/   Archived lane-detection benchmark work
+trafficflow/
+  core_ai/        YOLO/ByteTrack detector and AI model adapters
+  geometry/       Geometry primitives and spatial checks
+  counting/       Lane filtering, direction logic, and count aggregation
+  pipeline/       Reusable video-processing helpers
+  runtime/        Reusable workflow engine shared by CLI/API/worker
+  cli/            Local/demo command-line entrypoints
+  api/            Future FastAPI boundary
+  worker/         Future background worker boundary
+  queue/          Future task queue boundary
+  storage/        Future file/database persistence boundary
+  observability/  Future logging, metrics, and health boundary
+configs/          Manual geometry configs grouped by dataset/camera
+data/             Local raw videos and samples (ignored by git)
+outputs/          Generated videos, JSONL events, debug frames (ignored by git)
+models/           Local YOLO weights (ignored by git)
+scripts/          Batch/debug helper scripts
+tests/            Focused unit tests for counting and geometry
+old_benchmark/    Archived lane-detection benchmark work
 ```
+
+`trafficflow.cli.run_counting` is intentionally a thin wrapper. The reusable AI workflow now lives in
+`trafficflow.runtime.engine`, so future API and worker code can call the same processing path without
+depending on CLI argument parsing.
 
 ## Useful Scripts
 
