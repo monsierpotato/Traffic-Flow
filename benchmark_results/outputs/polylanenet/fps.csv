@@ -1,4 +1,0 @@
-"method","video","frames","avg_latency_ms","avg_inference_ms","p50_latency_ms","p95_latency_ms","fps"
-"PolyLaneNet-ResNet50-TuSimple","data\raw_videos\traffic_01_time_lapse.mp4","632","8.521","3.436","8.335","9.308","117.36"
-"PolyLaneNet-ResNet50-TuSimple","data\raw_videos\traffic_02_clouds_highway.mp4","587","9.128","3.558","9.086","9.503","109.55"
-"PolyLaneNet-ResNet50-TuSimple","data\raw_videos\traffic_03_night_time_lapse.mp4","308","8.487","3.505","8.407","8.739","117.83"

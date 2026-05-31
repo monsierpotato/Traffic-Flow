@@ -11,3 +11,5 @@ psutil
 ninja
 PyYAML
 efficientnet-pytorch
+ultralytics
+lap>=0.5.12
