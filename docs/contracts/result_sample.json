@@ -1,0 +1,22 @@
+{
+  "status": "completed",
+  "frames": 300,
+  "total_frames": 300,
+  "counts": {
+    "lane_1": {
+      "car": 12,
+      "bus": 1,
+      "truck": 2,
+      "motorcycle": 4
+    },
+    "lane_2": {
+      "car": 9,
+      "motorcycle": 11
+    }
+  },
+  "total_count": 39,
+  "outputs": {
+    "video_path": "outputs/demo_counted.mp4",
+    "events_jsonl_path": "outputs/demo_events.jsonl"
+  }
+}
