@@ -6,6 +6,7 @@
     "height": 1080
   },
   "annotation_roi": {
+    "type": "rectangle",
     "x": 400,
     "y": 300,
     "width": 900,

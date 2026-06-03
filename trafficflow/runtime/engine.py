@@ -36,6 +36,8 @@ class VideoCountingResult:
     counts: dict
     total_frames: Optional[int] = None
     status: str = "completed"
+    output_video_path: Optional[Path] = None
+    output_jsonl_path: Optional[Path] = None
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +45,11 @@ class VideoCountingResult:
             "frames": self.frames,
             "total_frames": self.total_frames,
             "counts": self.counts,
+            "total_count": _total_count(self.counts),
+            "outputs": {
+                "video_path": str(self.output_video_path) if self.output_video_path else None,
+                "events_jsonl_path": str(self.output_jsonl_path) if self.output_jsonl_path else None,
+            },
         }
 
 
@@ -178,7 +185,20 @@ class TrafficFlowEngine:
             progress=100.0 if total_frames is not None else None,
         )
 
-        return VideoCountingResult(frames=frame_index, counts=counter.counts, total_frames=total_frames)
+        return VideoCountingResult(
+            frames=frame_index,
+            counts=counter.counts,
+            total_frames=total_frames,
+            output_video_path=request.output_video_path,
+            output_jsonl_path=request.output_jsonl_path,
+        )
+
+
+def _total_count(counts: dict) -> int:
+    total = 0
+    for class_counts in counts.values():
+        total += sum(int(value) for value in class_counts.values())
+    return total
 
 
 def _effective_total_frames(video_total_frames: int, max_frames: Optional[int]) -> Optional[int]:
