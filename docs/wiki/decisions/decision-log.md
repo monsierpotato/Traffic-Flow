@@ -10,6 +10,10 @@
 - Store lane geometry in source-frame coordinates.
 - Support rectangular annotation ROI in the OpenCV config generator before building the web canvas flow.
 
+## Proposed / Under Review
+
+- Geometry config scaling: industrialize manual config first (web annotation behind `api/`), then automate geometry inference with confidence-routed human review; build a config-scoring harness before any inference. Do not change the counting paradigm unless count granularity is explicitly relaxed. See [[Geometry Config Scaling]].
+
 ## Deferred Decisions
 
 - Whether to crop frames during AI processing.
@@ -22,3 +26,4 @@
 - [[Production Architecture]]
 - [[ROI Annotation]]
 - [[Project Backlog]]
+- [[Geometry Config Scaling]]

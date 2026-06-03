@@ -7,7 +7,7 @@ The MVP target is a local end-to-end system: upload video, draw lane with rectan
 ## Current State
 
 - AI prototype and manual config generator exist.
-- Runtime engine exists and CLI counting delegates to it; progress callback exists, while final result contract is still missing.
+- Runtime engine exists and CLI counting delegates to it; progress callback and API-ready result contract exist.
 - ROI annotation contract, coordinate helper, tests, and OpenCV config generator integration exist.
 - OpenCV config generator now supports rectangular annotation ROI for cropped drawing while preserving source-frame lane coordinates.
 - Backend, worker, queue, database, frontend integration, and Docker remain future work.
@@ -36,12 +36,12 @@ Goal: make the existing AI engine clear, reusable, and callable from API/worker.
 
 | Task | Owner | Status |
 |---|---|---|
-| Complete `TrafficFlowEngine.process_video(...)` | Member 1 | In progress |
+| Complete `TrafficFlowEngine.process_video(...)` | Member 1 | Done |
 | Add `progress_callback` | Member 1 | Done |
-| Create `result_sample.json` | Member 1 + 3 | Todo |
+| Create `result_sample.json` | Member 1 + 3 | Done |
 | Create rectangular ROI annotation contract/helper | Member 1 + 2 + 3 | Done |
-| Finalize full web lane config sample/contract | Member 1 + 2 + 3 | In progress |
-| Run short-video smoke test after refactor | Member 1 + 5 | Todo |
+| Finalize full web lane config sample/contract | Member 1 + 2 + 3 | Done |
+| Run short-video smoke test after refactor | Member 1 + 5 | Done; synthetic runtime smoke passes and real YOLO smoke completed on 5 frames |
 
 ## Sprint 1: Backend + Frontend Skeleton
 

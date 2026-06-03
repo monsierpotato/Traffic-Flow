@@ -43,3 +43,13 @@
 - Progress payloads include `status`, `frame_index`, `frames_processed`, `total_frames`, and `progress`.
 - Added `docs/contracts/progress_callback.md` and `docs/wiki/contracts/progress-callback-contract.md`.
 - Updated Sprint 0 backlog status for `progress_callback` to Done.
+
+## [2026-06-02] ingest | Complete Sprint 0 Runtime Contracts
+
+- Added API-ready result contract at `docs/contracts/video_counting_result.md`.
+- Added sample result JSON at `docs/contracts/result_sample.json`.
+- Extended `VideoCountingResult.to_dict()` with `total_count` and output artifact paths.
+- Added synthetic runtime smoke test coverage in `tests/test_runtime_engine.py`.
+- Updated lane config sample to include rectangular `annotation_roi.type`.
+- Ran real YOLO smoke on 5 frames using the Đà Nẵng Cầu Rồng video/config and `models/yolov8n.pt`; result completed with 5 processed frames and 1 counted car.
+- Updated Sprint 0 backlog to Done.
