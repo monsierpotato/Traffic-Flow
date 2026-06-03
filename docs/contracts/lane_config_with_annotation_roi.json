@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "camera_id": "camera_01",
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 400,
+    "y": 300,
+    "width": 900,
+    "height": 400,
+    "purpose": "frontend_annotation_only"
+  },
+  "method": "counting_gate",
+  "settings": {
+    "movement_threshold_px": 5,
+    "cooldown_frames": 12,
+    "cooldown_distance_px": 32,
+    "zone_policy": "flexible"
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "valid_zone": [
+        [520, 380],
+        [900, 410],
+        [980, 620],
+        [560, 610]
+      ],
+      "counting_line": [
+        [620, 520],
+        [930, 535]
+      ],
+      "direction": [
+        [680, 430],
+        [760, 590]
+      ],
+      "class_allowed": ["car", "bus", "truck", "motorcycle"]
+    }
+  ]
+}
