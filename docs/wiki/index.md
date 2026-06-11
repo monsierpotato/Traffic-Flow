@@ -6,6 +6,7 @@
 
 ## AI Workflow
 - [[Runtime Engine]] - The reusable counting workflow shared by CLI now and future API/worker code.
+- [[AI Core Integration Guide]] - How the Backend worker installs and calls the AI core as a library (install, public API, worker example).
 - [[ROI Annotation]] - Rectangular crop workflow for more accurate lane drawing while keeping source-frame coordinates.
 
 ## Contracts
