@@ -1,4 +1,0 @@
-interface:
-  display_name: "TrafficFlow Wiki Agent"
-  short_description: "Maintains a persistent project wiki for TrafficFlow."
-  default_prompt: "Use the TrafficFlow wiki agent to ingest project sources, answer architecture questions, update wiki pages, and lint the project knowledge base."
