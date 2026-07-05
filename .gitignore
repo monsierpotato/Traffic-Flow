@@ -6,6 +6,9 @@ __pycache__/
 venv/
 .env
 
+# Old ref moved to src/tfengine/
+trafficflow/
+
 # pytest
 .pytest_cache/
 
@@ -14,6 +17,7 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+.codex/
 
 # Benchmark data and generated outputs
 data/raw_videos/*.mp4
