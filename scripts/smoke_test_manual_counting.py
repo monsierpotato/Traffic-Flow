@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from trafficflow.counting.methods import TrackObservation, build_counter
+from tfengine.counting.methods import TrackObservation, build_counter
 
 
 def test_counting_line_per_lane() -> None:
