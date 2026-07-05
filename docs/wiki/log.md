@@ -53,3 +53,44 @@
 - Updated lane config sample to include rectangular `annotation_roi.type`.
 - Ran real YOLO smoke on 5 frames using the Đà Nẵng Cầu Rồng video/config and `models/yolov8n.pt`; result completed with 5 processed frames and 1 counted car.
 - Updated Sprint 0 backlog to Done.
+
+## [2026-07-04] test | E2E Full Flow Verification
+
+- Verified complete end-to-end pipeline: Frontend upload → Backend API → MongoDB → Redis/Celery → Worker → Modal AI → Callback → Result.
+- All connections PASS: MongoDB Atlas, Redis Cloud, Cloudflare R2, Celery broker.
+- New bug found: `.env` `AI_SERVING_URL` contained spaces and `--` in the URL (FIXED).
+- New bug found: `HTTP_422_UNPROCESSABLE_ENTITY` deprecated warning in Starlette — should use `HTTP_422_UNPROCESSABLE_CONTENT`.
+- Deprecation warning: `starlette.testclient` requires `httpx2` instead of `httpx`.
+- Frontend built with Vite + React is fully functional — upload, ROI masking, lane geometry editor, analytics dashboard.
+- See [[Backend Refactor Plan]] for the full refactor proposal.
+
+## [2026-07-04] audit | Backend Package Architecture Audit
+
+- **Critical issue**: Package name collision between root `trafficflow/` (backend) and `Traffic-Flow_Frontend/trafficflow/` (AI core). Both use `trafficflow` namespace.
+- **Critical issue**: Worker bypasses AI core engine — uses HTTP to call Modal GPU API instead of importing `TrafficFlowEngine` from `trafficflow.runtime` directly.
+- **Structural issue**: 10 empty stub directories in root `trafficflow/`: `runtime/`, `core_ai/`, `counting/`, `geometry/`, `pipeline/`, `worker/`, `queue/`, `storage/`, `observability/`, `cli/` — all contain only `__pycache__/`.
+- **Bug**: `tasks.py` allows re-processing of already completed/failed tasks (status check only blocks "uploaded").
+- **Decision**: Backend package needs refactoring into `backend/` to resolve namespace collision and clean up stub directories.
+
+## [2026-07-04] fix | Applied Quick Fixes
+
+- **FIXED**: `.env` `AI_SERVING_URL` spaces in URL (was `https://tienpm205 -- ...` → `https://tienpm205--...`)
+- **FIXED**: Deprecated `HTTP_422_UNPROCESSABLE_ENTITY` → `HTTP_422_UNPROCESSABLE_CONTENT` in `upload.py:44`
+- **FIXED**: Task status validation in `tasks.py:process_task` — now blocks re-processing of `completed`, `failed`, `archived` tasks and rejects concurrent `pending`/`processing` tasks with 409 Conflict
+
+## [2026-07-04] refactor | Phase 1 — Backend Package Restructure
+
+- **Moved**: root `trafficflow/` (backend) → `backend/` — resolves package name collision with AI core
+- **Renamed**: `Traffic-Flow_Frontend/` → `ai-core/` — clear separation: `backend/` = FastAPI app, `ai-core/` = installable AI library
+- **Deleted**: 10 empty stub directories (`runtime/`, `core_ai/`, `counting/`, `geometry/`, `pipeline/`, `worker/`, `queue/`, `storage/`, `observability/`, `cli/`)
+- **Updated**: All 26 Python imports from `trafficflow.*` → `backend.*`
+- **Updated**: `run_server.bat`, `run_worker.bat`, `backend/main.py` module paths
+- **Updated**: Frontend mount path to `ai-core/frontend/dist`
+- **Tested**: Full E2E flow verified — upload, configure lanes, process, Celery worker, progress callbacks
+
+## [2026-07-04] refactor | Phase 2-4 — Cleanup, Docs, Quality
+
+- **Phase 2**: Worker code confirmed working with Modal HTTP API (accepted architecture). All imports clean.
+- **Phase 3**: Removed stale root `docs/` (empty duplicate skeleton) and root `frontend/` (empty stub). Fixed 14 scratch file imports to point to `backend.*`.
+- **Phase 4**: Updated `production-architecture.md` to reflect current architecture, updated `decision-log.md`, updated `project-backlog.md`, and this `log.md`.
+- **Verified**: `git status` clean of orphaned `trafficflow.*` references. Package structure now clear: `backend/` = FastAPI app, `ai-core/` = AI library.
