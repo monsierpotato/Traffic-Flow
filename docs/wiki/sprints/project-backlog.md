@@ -10,7 +10,10 @@ The MVP target is a local end-to-end system: upload video, draw lane with rectan
 - Runtime engine exists and CLI counting delegates to it; progress callback and API-ready result contract exist.
 - ROI annotation contract, coordinate helper, tests, and OpenCV config generator integration exist.
 - OpenCV config generator now supports rectangular annotation ROI for cropped drawing while preserving source-frame lane coordinates.
-- Backend, worker, queue, database, frontend integration, and Docker remain future work.
+- Backend, worker, queue, database, and frontend integration are implemented and E2E verified.
+- Package collision between root `trafficflow/` (backend) and `Traffic-Flow_Frontend/trafficflow/` (AI core) needs resolution.
+- Worker currently calls Modal GPU via HTTP API instead of using `TrafficFlowEngine` directly — refactor planned.
+- See [[Backend Refactor Plan]] for full refactor proposal.
 
 ## Ownership
 
@@ -49,13 +52,19 @@ Goal: upload video, extract preview frame, draw lane, and create task.
 
 | Task | Owner | Status |
 |---|---|---|
-| FastAPI skeleton in `trafficflow/api/app.py` | Member 3 | Todo |
-| DB schema: Task, TrafficStatistic, LaneConfig | Member 3 | Todo |
-| Upload video API | Member 3 | Todo |
-| Preview frame API | Member 3 | Todo |
-| Frontend upload video | Member 2 | Todo |
-| Frontend canvas draw line/zone/direction | Member 2 | Todo |
-| Coordinate scaling | Member 2 + 5 | Todo |
+| FastAPI skeleton in `trafficflow/api/app.py` | Member 3 | Done |
+| DB schema: Task, TrafficStatistic, LaneConfig | Member 3 | Done |
+| Upload video API | Member 3 | Done |
+| Preview frame API | Member 3 | Done |
+| Frontend upload video | Member 2 | Done |
+| Frontend canvas draw line/zone/direction | Member 2 | Done |
+| Coordinate scaling | Member 2 + 5 | Done |
+
+Remaining Sprint 1 items:
+| Data retention (cron cleanup expired files) | Member 3 | Done |
+| File size & format validation middleware | Member 3 | Done |
+| Package refactor: rename `trafficflow/` → `backend/` | Member 3 | Done |
+| Rename `Traffic-Flow_Frontend/` → `ai-core/` | Member 3 | Done |
 
 ## Sprint 2: Worker + AI Integration
 
@@ -63,12 +72,16 @@ Goal: enqueue task and process real video asynchronously.
 
 | Task | Owner | Status |
 |---|---|---|
-| Redis/Celery setup | Member 4 | Todo |
-| `process_video_task(task_id)` | Member 4 | Todo |
-| Worker calls `TrafficFlowEngine` | Member 4 + 1 | Todo |
-| Update task progress | Member 4 + 3 | Todo |
-| Save result to DB/file | Member 3 + 4 | Todo |
-| Status/result APIs | Member 3 | Todo |
+| Redis/Celery setup | Member 4 | Done |
+| `process_video_task(task_id)` | Member 4 | Done |
+| Worker calls `TrafficFlowEngine` (currently uses Modal HTTP API instead) | Member 4 + 1 | Partial — implemented but bypasses AI core |
+| Update task progress via callback | Member 4 + 3 | Done |
+| Save result to DB/file | Member 3 + 4 | Done |
+| Status/result APIs | Member 3 | Done |
+
+Remaining Sprint 2 items:
+| Refactor worker to import `TrafficFlowEngine` directly (currently uses Modal HTTP API — accepted decision to keep Modal) | Member 4 + 1 | Done (decision: keep Modal HTTP, counting runs locally) |
+| Remove duplicate CountingState in backend | Member 4 | Done (verified — backend CountingState is unique and needed) |
 
 ## Sprint 3: End-To-End Local
 

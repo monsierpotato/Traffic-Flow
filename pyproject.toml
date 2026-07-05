@@ -4,35 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trafficflow"
-version = "0.1.0"
-description = "Reusable AI runtime engine for traffic video counting (YOLOv8 + ByteTrack)."
-readme = "README.md"
+version = "0.2.0"
+description = "TrafficFlow — vehicle counting platform (API + worker + AI engine)."
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
 
-# Core runtime dependencies for the reusable engine library.
-# Backend/worker code installs this package and calls trafficflow.runtime.
-# Heavy GPU/inference deps live in the optional [gpu] extra below.
 dependencies = [
     "opencv-python",
     "numpy",
 ]
 
 [project.optional-dependencies]
-# Inference stack required to actually run TrafficFlowEngine.process_video().
-# PyTorch CUDA wheels are NOT listed here on purpose: they must be installed
-# from the official CUDA wheel index, e.g.
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+worker = [
+    "celery",
+    "redis",
+    "requests",
+    "urllib3",
+]
+api = [
+    "fastapi",
+    "uvicorn",
+    "motor",
+    "apscheduler",
+    "boto3",
+    "python-multipart",
+]
 gpu = [
     "ultralytics",
     "lap>=0.5.12",
     "scipy",
-]
-
-# Optional: run the local CLI adapters and test suite.
-cli = [
-    "tqdm",
-    "PyYAML",
+    "torch",
+    "torchvision",
 ]
 dev = [
     "pytest",
@@ -40,17 +42,16 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-# Ship only the reusable AI-core library modules. Backend-owned boundaries
-# (api/worker/queue/storage/observability) and CLI are intentionally excluded
-# from the runtime distribution.
+where = ["src"]
 include = [
-    "trafficflow",
-    "trafficflow.runtime*",
-    "trafficflow.core_ai*",
-    "trafficflow.counting*",
-    "trafficflow.geometry*",
-    "trafficflow.pipeline*",
+    "tfengine",
+    "tfengine.runtime*",
+    "tfengine.core_ai*",
+    "tfengine.counting*",
+    "tfengine.geometry*",
+    "tfengine.pipeline*",
+    "tfengine.cli*",
 ]
 
 [tool.setuptools.package-data]
-trafficflow = ["py.typed"]
+tfengine = ["py.typed"]
