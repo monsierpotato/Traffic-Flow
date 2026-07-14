@@ -155,6 +155,27 @@ button:disabled {
   font-weight: 600;
 }
 
+
+.deploy-pill {
+  background: rgba(95, 138, 105, 0.12);
+  border: 1px solid rgba(95, 138, 105, 0.25);
+  border-radius: 999px;
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.danger-lite {
+  border-color: rgba(184, 75, 75, 0.35) !important;
+  color: #9f3f3f !important;
+}
+
+.danger-lite:hover:not(:disabled) {
+  background: rgba(184, 75, 75, 0.08) !important;
+}
+
 .top-actions {
   gap: 8px;
 }
@@ -248,9 +269,14 @@ button:disabled {
 }
 
 .nav-item.active,
-.nav-item:hover {
+.nav-item:hover:not(:disabled) {
   background: var(--surface-soft);
   color: var(--primary-dark);
+}
+
+.nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .side-stat {
@@ -368,11 +394,57 @@ button:disabled {
 .metrics-panel,
 .chart-panel,
 .console-panel,
+.debug-panel,
 .terminal,
 .json-modal {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+
+.operator-alert {
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--primary);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin: 0 auto 18px;
+  max-width: 1180px;
+  padding: 12px 14px;
+}
+
+.operator-alert.error {
+  border-left-color: var(--danger);
+}
+
+.operator-alert > .material-symbols-outlined {
+  color: var(--primary-dark);
+  margin-top: 1px;
+}
+
+.operator-alert.error > .material-symbols-outlined {
+  color: var(--danger);
+}
+
+.operator-alert strong {
+  color: var(--text);
+  display: block;
+  font-size: 0.95rem;
+}
+
+.operator-alert p,
+.operator-alert small {
+  color: var(--muted);
+  display: block;
+  margin: 3px 0 0;
+}
+
+.operator-alert small {
+  font-size: 0.8rem;
 }
 
 .upload-band {
@@ -685,7 +757,12 @@ button:disabled {
 }
 
 .dashboard-grid {
-  grid-template-columns: minmax(0, 1.35fr) 300px;
+  align-items: start;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
+}
+
+.media-panel {
+  grid-row: span 2;
 }
 
 .media-panel {
@@ -699,6 +776,21 @@ button:disabled {
   border-radius: 8px;
   display: block;
   width: 100%;
+}
+
+.live-output {
+  object-fit: contain;
+}
+
+.live-placeholder {
+  align-items: center;
+  color: rgba(255, 255, 255, 0.72);
+  display: flex;
+  font-size: 0.95rem;
+  justify-content: center;
+  min-height: 260px;
+  padding: 18px;
+  text-align: center;
 }
 
 .progress-track {
@@ -722,9 +814,56 @@ button:disabled {
   gap: 12px;
 }
 
+.output-summary {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.live-panel,
 .chart-panel,
+.debug-panel,
 .console-panel {
   grid-column: span 1;
+}
+
+.chart-panel,
+.debug-panel,
+.console-panel {
+  padding: 18px;
+}
+
+.debug-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.debug-row {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  padding: 9px 10px;
+}
+
+.debug-row span {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.debug-row strong {
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lane-bars {
@@ -817,6 +956,14 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .output-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .media-panel {
+    grid-row: auto;
+  }
+
   .tool-panel,
   .lane-tools {
     max-height: none;
@@ -864,8 +1011,139 @@ button:disabled {
     flex: 1;
   }
 
-  .upload-band {
+.upload-band {
     min-height: 260px;
     padding: 22px;
   }
+}
+
+
+.live-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.live-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(240px, 1fr) auto auto auto;
+  margin-top: 14px;
+}
+
+.live-controls input {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 11px 12px;
+  width: 100%;
+}
+
+.hint-text {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 10px 0 0;
+}
+
+.readiness-card {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+}
+
+.readiness-card-header,
+.readiness-item {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.readiness-card-header {
+  color: var(--muted);
+  font-size: 0.78rem;
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.readiness-card-header strong {
+  color: var(--text);
+}
+
+.readiness-item {
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.readiness-item.ready {
+  background: rgba(95, 138, 105, 0.1);
+}
+
+.readiness-item.blocked {
+  background: rgba(215, 189, 114, 0.12);
+}
+
+.readiness-item .material-symbols-outlined {
+  color: var(--muted);
+  font-size: 20px;
+}
+
+.readiness-item.ready .material-symbols-outlined {
+  color: var(--primary-dark);
+}
+
+.readiness-item strong,
+.readiness-item small {
+  display: block;
+}
+
+.readiness-item strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.readiness-item small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.live-metrics {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin-top: 14px;
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+
+
+.meta-pill.status-running,
+.meta-pill.status-completed,
+.meta-pill.status-ready_to_start,
+.meta-pill.status-configured {
+  background: rgba(95, 138, 105, 0.12);
+  color: var(--primary-dark);
+}
+
+.meta-pill.status-failed,
+.meta-pill.status-error {
+  background: rgba(184, 75, 75, 0.12);
+  color: #9f3f3f;
+}
+
+.meta-pill.status-stopping,
+.meta-pill.status-processing,
+.meta-pill.status-starting {
+  background: rgba(215, 189, 114, 0.2);
+  color: #836514;
 }

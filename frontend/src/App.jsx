@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const STEPS = [
-  { id: "upload", label: "Video Source", icon: "upload_file" },
-  { id: "roi", label: "ROI Masking", icon: "crop_free" },
-  { id: "lanes", label: "Lane Geometry", icon: "timeline" },
-  { id: "analytics", label: "Analytics", icon: "analytics" },
+  { id: "upload", label: "Source", icon: "upload_file", help: "Upload a file or resolve a live stream." },
+  { id: "roi", label: "ROI", icon: "crop_free", help: "Mark the road area used for analytics." },
+  { id: "lanes", label: "Lanes", icon: "timeline", help: "Draw lane zones, counting lines, and direction vectors." },
+  { id: "analytics", label: "Run", icon: "analytics", help: "Start processing and inspect output." },
 ];
 
 const CLASS_ALLOWED = ["car", "bus", "truck", "motorcycle"];
@@ -30,6 +30,8 @@ function App() {
   const [taskId, setTaskId] = useState("");
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
+  const [sourceMode, setSourceMode] = useState("video");
+  const [liveSource, setLiveSource] = useState(null);
   const [preview, setPreview] = useState(null);
   const [roi, setRoi] = useState(null);
   const [crop, setCrop] = useState(null);
@@ -45,10 +47,31 @@ function App() {
   const [logs, setLogs] = useState(["> initialize_pipeline()", "> waiting for input stream..."]);
   const [submittedConfig, setSubmittedConfig] = useState(null);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const [operatorAlert, setOperatorAlert] = useState(null);
 
   const appendLog = useCallback((line) => {
     setLogs((current) => [...current.slice(-9), `> ${line}`]);
   }, []);
+
+  const resetWorkflow = useCallback(() => {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setStepIndex(0);
+    setTaskId("");
+    setVideoFile(null);
+    setVideoUrl("");
+    setSourceMode("video");
+    setLiveSource(null);
+    setPreview(null);
+    setRoi(null);
+    setCrop(null);
+    setLanes([createLane(1)]);
+    setTaskStatus({ status: "draft", progress: 0 });
+    setResult(null);
+    setSubmittedConfig(null);
+    setJsonOpen(false);
+    setOperatorAlert(null);
+    setLogs(["> initialize_pipeline()", "> waiting for input stream..."]);
+  }, [videoUrl]);
 
   const goTo = useCallback((nextIndex) => {
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, nextIndex)));
@@ -66,17 +89,57 @@ function App() {
     const localVideoUrl = URL.createObjectURL(file);
     setVideoFile(file);
     setVideoUrl(localVideoUrl);
+    setSourceMode("video");
+    setLiveSource(null);
     appendLog(`uploading ${file.name}`);
 
-    const response = await uploadVideo(file);
-    setTaskId(response.task_id);
-    setTaskStatus({ status: response.status, progress: 0 });
-    appendLog(`task created: ${response.task_id}`);
+    try {
+      setOperatorAlert(null);
+      const response = await uploadVideo(file);
+      setTaskId(response.task_id);
+      setTaskStatus({ status: response.status, progress: 0 });
+      appendLog(`task created: ${response.task_id}`);
 
-    const previewAsset = await fetchPreview(response.task_id, file, localVideoUrl);
-    setPreview(previewAsset);
-    appendLog(`preview ready: ${previewAsset.width}x${previewAsset.height}`);
-    goTo(1);
+      const previewAsset = await fetchPreview(response.task_id, file, localVideoUrl);
+      setPreview(previewAsset);
+      appendLog(`preview ready: ${previewAsset.width}x${previewAsset.height}`);
+      goTo(1);
+    } catch (error) {
+      const message = error.message || "Upload failed";
+      setTaskStatus({ status: "error", progress: 0, stage: "upload_failed", stage_detail: message });
+      setOperatorAlert({ tone: "error", title: "Upload failed", message, action: "Check the video file or backend API, then upload again." });
+      appendLog(`upload failed: ${message}`);
+    }
+  }
+
+  async function handleLiveResolve(url) {
+    if (!url?.trim()) return;
+    appendLog(`resolving live source: ${url.trim()}`);
+    try {
+      setOperatorAlert(null);
+      const source = await resolveLiveSource(url.trim());
+      if (source.error) {
+        throw new Error(source.error);
+      }
+      const previewAsset = await loadImage(source.preview_url);
+      setSourceMode("live");
+      setLiveSource(source);
+      setTaskId(source.source_id);
+      setVideoFile(null);
+      setVideoUrl(source.resolved_url || source.source_url);
+      setPreview(previewAsset);
+      setTaskStatus({ status: "source_ready", progress: 0, stage: "annotate_source", stage_detail: source.source_type });
+      setRoi(null);
+      setCrop(null);
+      setLanes([createLane(1)]);
+      appendLog(`live preview ready: ${previewAsset.width}x${previewAsset.height} (${source.source_type})`);
+      goTo(1);
+    } catch (error) {
+      const message = error.message || "Live source could not be resolved";
+      setTaskStatus({ status: "error", progress: 0, stage: "source_resolve_failed", stage_detail: message });
+      setOperatorAlert({ tone: "error", title: "Live source failed", message, action: "Confirm the URL is reachable, then resolve the source again." });
+      appendLog(`live resolve failed: ${message}`);
+    }
   }
 
   function handleRoiConfirm(nextRoi) {
@@ -97,22 +160,55 @@ function App() {
       videoFile,
     });
     setSubmittedConfig(config);
+    setOperatorAlert(null);
+    appendLog(`${sourceMode === "live" ? "validating live" : "submitting"} ${config.lanes.length} lane configs`);
+
+    if (sourceMode === "live") {
+      const validation = await validateLiveConfig(config);
+      if (!validation.valid) {
+        const message = (validation.errors || []).join("; ") || "Geometry validation failed";
+        setTaskStatus({ status: "error", progress: 0, stage: "live_config_invalid", stage_detail: message });
+        setOperatorAlert({ tone: "error", title: "Live config invalid", message, action: "Return to Lanes and fix each lane zone, counting line, and direction vector." });
+        appendLog(`live config invalid: ${message}`);
+        return;
+      }
+      setLanes(laneDrafts);
+      setTaskStatus({ status: "configured", progress: 0, stage: "ready_for_live", stage_detail: "Geometry validated" });
+      goTo(3);
+      return;
+    }
+
     appendLog(`submitting ${config.lanes.length} lane configs`);
 
-    const response = await submitTask(taskId, config);
-    setTaskStatus({ status: response.status || "queued", progress: response.progress || 0, startedAt: Date.now() });
-    setLanes(laneDrafts);
-    goTo(3);
+    try {
+      const response = await submitTask(taskId, config);
+      setTaskStatus({ status: response.status || "queued", progress: response.progress || 0, startedAt: Date.now() });
+      setLanes(laneDrafts);
+      goTo(3);
+    } catch (error) {
+      const message = error.message || "Task submission failed";
+      setTaskStatus({ status: "error", progress: 0, stage: "task_submit_failed", stage_detail: message });
+      setOperatorAlert({ tone: "error", title: "Batch submit failed", message, action: "Check backend availability, then submit the lane task again." });
+      appendLog(`task submit failed: ${message}`);
+    }
   }
 
   return (
     <div className="app-shell">
-      <TopBar stepIndex={stepIndex} setStepIndex={goTo} />
+      <TopBar stepIndex={stepIndex} setStepIndex={goTo} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} />
       <main className="app-main">
-        <SideNav taskStatus={taskStatus} result={result} />
+        <SideNav
+          taskStatus={taskStatus}
+          result={result}
+          stepIndex={stepIndex}
+          goTo={goTo}
+          canOpenDashboard={Boolean(submittedConfig)}
+          canOpenLaneConfig={Boolean(crop)}
+        />
         <section className="workspace">
           <WizardNav stepIndex={stepIndex} />
-          {stepIndex === 0 && <UploadStep onUpload={handleUpload} logs={logs} />}
+          {operatorAlert && <OperatorAlert alert={operatorAlert} onDismiss={() => setOperatorAlert(null)} />}
+          {stepIndex === 0 && <UploadStep onUpload={handleUpload} onLiveResolve={handleLiveResolve} logs={logs} />}
           {stepIndex === 1 && preview && <RoiMaskingStep preview={preview} onBack={() => goTo(0)} onConfirm={handleRoiConfirm} />}
           {stepIndex === 2 && crop && (
             <LaneEditorStep
@@ -123,6 +219,7 @@ function App() {
               setSettings={setSettings}
               onBack={() => goTo(1)}
               onSubmit={handleSubmit}
+              sourceMode={sourceMode}
             />
           )}
           {stepIndex === 3 && (
@@ -134,6 +231,8 @@ function App() {
               result={result}
               setResult={setResult}
               submittedConfig={submittedConfig}
+              sourceMode={sourceMode}
+              liveSource={liveSource}
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
             />
@@ -145,7 +244,7 @@ function App() {
   );
 }
 
-function TopBar({ stepIndex, setStepIndex }) {
+function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
@@ -154,24 +253,38 @@ function TopBar({ stepIndex, setStepIndex }) {
       </div>
       <nav className="top-steps" aria-label="Workflow">
         {STEPS.map((step, index) => (
-          <button key={step.id} className={index === stepIndex ? "active" : ""} onClick={() => index <= stepIndex && setStepIndex(index)}>
+          <button
+            key={step.id}
+            className={index === stepIndex ? "active" : ""}
+            disabled={index > stepIndex}
+            title={step.help}
+            onClick={() => index <= stepIndex && setStepIndex(index)}
+          >
             {step.label}
           </button>
         ))}
       </nav>
       <div className="top-actions">
-        <button className="icon-button" aria-label="Settings">
-          <span className="material-symbols-outlined">settings</span>
-        </button>
-        <button className="icon-button" aria-label="Help">
-          <span className="material-symbols-outlined">help</span>
+        <span className="deploy-pill" title="Deployment readiness profile">Deploy-ready UI</span>
+        <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
+          <span className="material-symbols-outlined">restart_alt</span>
         </button>
       </div>
     </header>
   );
 }
 
-function SideNav({ taskStatus, result }) {
+function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpenLaneConfig }) {
+  const openLogs = () => {
+    const logPanel = document.getElementById("system-logs");
+    if (logPanel) {
+      logPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    goTo(0);
+    window.setTimeout(() => document.getElementById("system-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+
   return (
     <aside className="side-nav">
       <div className="runtime-card">
@@ -182,10 +295,10 @@ function SideNav({ taskStatus, result }) {
         </div>
       </div>
       <div className="nav-stack">
-        <NavItem icon="dashboard" label="Dashboard" active />
-        <NavItem icon="videocam" label="Camera Feed" />
-        <NavItem icon="schema" label="Lane Config" />
-        <NavItem icon="terminal" label="System Logs" />
+        <NavItem icon="dashboard" label="Dashboard" active={stepIndex === 3} disabled={!canOpenDashboard} title="Open analytics dashboard after a config is submitted" onClick={() => goTo(3)} />
+        <NavItem icon="videocam" label="Camera Feed" active={stepIndex === 0 || stepIndex === 1} title="Open source upload/live resolve and camera preview workflow" onClick={() => goTo(0)} />
+        <NavItem icon="schema" label="Lane Config" active={stepIndex === 2} disabled={!canOpenLaneConfig} title="Open lane editor after ROI is confirmed" onClick={() => goTo(2)} />
+        <NavItem icon="terminal" label="System Logs" title="Jump to the visible workflow/runtime logs" onClick={openLogs} />
       </div>
       <div className="side-stat">
         <span className="eyebrow">Total Count</span>
@@ -195,9 +308,9 @@ function SideNav({ taskStatus, result }) {
   );
 }
 
-function NavItem({ icon, label, active = false }) {
+function NavItem({ icon, label, active = false, disabled = false, title, onClick }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`}>
+    <button className={`nav-item ${active ? "active" : ""}`} disabled={disabled} title={title} onClick={onClick}>
       <span className="material-symbols-outlined">{icon}</span>
       {label}
     </button>
@@ -213,6 +326,7 @@ function WizardNav({ stepIndex }) {
           <div>
             <small>Step {index + 1}</small>
             <strong>{step.label}</strong>
+            <em>{step.help}</em>
           </div>
         </div>
       ))}
@@ -220,9 +334,26 @@ function WizardNav({ stepIndex }) {
   );
 }
 
-function UploadStep({ onUpload, logs }) {
+function OperatorAlert({ alert, onDismiss }) {
+  return (
+    <div className={`operator-alert ${alert.tone || "info"}`}>
+      <span className="material-symbols-outlined">{alert.tone === "error" ? "error" : "info"}</span>
+      <div>
+        <strong>{alert.title}</strong>
+        <p>{alert.message}</p>
+        {alert.action && <small>{alert.action}</small>}
+      </div>
+      <button className="icon-button" onClick={onDismiss} aria-label="Dismiss alert">
+        <span className="material-symbols-outlined">close</span>
+      </button>
+    </div>
+  );
+}
+
+function UploadStep({ onUpload, onLiveResolve, logs }) {
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [liveUrl, setLiveUrl] = useState("");
   const inputRef = useRef(null);
 
   async function acceptFile(file) {
@@ -231,12 +362,37 @@ function UploadStep({ onUpload, logs }) {
     setBusy(false);
   }
 
+  async function resolveUrl() {
+    if (!liveUrl.trim()) return;
+    setBusy(true);
+    await onLiveResolve(liveUrl);
+    setBusy(false);
+  }
+
   return (
     <div className="step-layout single">
       <div>
         <p className="eyebrow">Sprint 1 frontend</p>
         <h2>Video Source</h2>
-        <p className="lede">Initialize the TrafficFlow pipeline by selecting a traffic video stream.</p>
+        <p className="lede">Initialize the TrafficFlow pipeline by selecting a video file or resolving a live stream snapshot for annotation.</p>
+      </div>
+      <div className="live-panel">
+        <div className="panel-header compact">
+          <div>
+            <p className="eyebrow">Realtime source setup</p>
+            <h3>Resolve stream before annotation</h3>
+          </div>
+          <span className="meta-pill">YouTube · HLS · RTSP · MJPEG</span>
+        </div>
+        <div className="live-controls">
+          <input
+            value={liveUrl}
+            onChange={(event) => setLiveUrl(event.target.value)}
+            placeholder="Paste YouTube/HLS/RTSP/MJPEG/direct video URL"
+          />
+          <button className="primary-button" disabled={busy || !liveUrl.trim()} onClick={resolveUrl}>Resolve Source</button>
+        </div>
+        <p className="hint-text">The app captures a preview frame first. Draw ROI/lanes/counting line/vector before starting live inference.</p>
       </div>
       <div
         className={`upload-band ${dragging ? "dragging" : ""}`}
@@ -264,7 +420,7 @@ function UploadStep({ onUpload, logs }) {
         <p>MP4 or AVI. Backend upload is attempted first, then local mock mode takes over if unavailable.</p>
         <button className="secondary-button" type="button">Browse Files</button>
       </div>
-      <Terminal lines={logs} />
+      <div id="system-logs"><Terminal lines={logs} /></div>
     </div>
   );
 }
@@ -273,18 +429,27 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
   const canvasRef = useRef(null);
   const [vertices, setVertices] = useState(() => defaultRoi(preview));
   const [dragIndex, setDragIndex] = useState(null);
+  const [selectedIndex, setSelectedIndex] = useState(null);
   const cropRect = useMemo(() => boundingRect(vertices, preview.width, preview.height), [vertices, preview]);
+  const canConfirm = vertices.length >= 3;
 
   useEffect(() => {
-    drawRoiCanvas(canvasRef.current, preview, vertices);
-  }, [preview, vertices]);
+    drawRoiCanvas(canvasRef.current, preview, vertices, cropRect, selectedIndex);
+  }, [preview, vertices, cropRect, selectedIndex]);
 
   const pointer = useCanvasPointer(canvasRef);
 
   function handleDown(event) {
     const point = pointer(event);
     const index = vertices.findIndex((vertex) => distance(vertex, point) < handleHitRadius(preview));
-    if (index >= 0) setDragIndex(index);
+    if (index >= 0) {
+      setDragIndex(index);
+      setSelectedIndex(index);
+      return;
+    }
+    const nextPoint = clampPoint(point, preview.width, preview.height);
+    setVertices((current) => [...current, nextPoint]);
+    setSelectedIndex(vertices.length);
   }
 
   function handleMove(event) {
@@ -297,6 +462,29 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
     setDragIndex(null);
   }
 
+  function removeSelectedPoint() {
+    if (selectedIndex === null || vertices.length <= 3) return;
+    setVertices((current) => current.filter((_, index) => index !== selectedIndex));
+    setSelectedIndex(null);
+  }
+
+  function resetRoi() {
+    setVertices(defaultRoi(preview));
+    setSelectedIndex(null);
+    setDragIndex(null);
+  }
+
+  function useFullFrameRoi() {
+    setVertices([
+      { x: 0, y: 0 },
+      { x: preview.width, y: 0 },
+      { x: preview.width, y: preview.height },
+      { x: 0, y: preview.height },
+    ]);
+    setSelectedIndex(null);
+    setDragIndex(null);
+  }
+
   return (
     <div className="step-layout">
       <section className="canvas-panel">
@@ -305,7 +493,7 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
             <p className="eyebrow">Region of interest</p>
             <h2>ROI Masking Canvas</h2>
           </div>
-          <span className="meta-pill">{Math.round(cropRect.width)} x {Math.round(cropRect.height)}</span>
+          <span className="meta-pill">{vertices.length} pts · {Math.round(cropRect.width)} x {Math.round(cropRect.height)}</span>
         </div>
         <canvas
           ref={canvasRef}
@@ -322,21 +510,27 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
       <aside className="tool-panel">
         <p className="eyebrow">Crop transform</p>
         <h3>Confirm focused frame</h3>
-        <p>Drag the four anchor points around the road area. The next step will crop to this bounding rectangle and draw lanes inside it.</p>
+        <p>Click to add ROI points, drag anchors to refine the road polygon. Detection stays full-frame; ROI is used for analytics, lane context, and operator review.</p>
+        <Metric label="ROI Points" value={vertices.length} />
         <Metric label="Crop X" value={Math.round(cropRect.x)} />
         <Metric label="Crop Y" value={Math.round(cropRect.y)} />
         <Metric label="Width" value={Math.round(cropRect.width)} />
         <Metric label="Height" value={Math.round(cropRect.height)} />
         <div className="button-row">
+          <button className="secondary-button" onClick={removeSelectedPoint} disabled={selectedIndex === null || vertices.length <= 3}>Delete Point</button>
+          <button className="secondary-button" onClick={resetRoi} title="Return to the recommended road ROI">Reset ROI</button>
+          <button className="secondary-button" onClick={useFullFrameRoi} title="Use the whole frame as analytics ROI">Full Frame</button>
+        </div>
+        <div className="button-row">
           <button className="secondary-button" onClick={onBack}>Back</button>
-          <button className="primary-button" onClick={() => onConfirm({ polygon: vertices, cropRect })}>Confirm ROI</button>
+          <button className="primary-button" disabled={!canConfirm} onClick={() => onConfirm({ polygon: vertices, cropRect })}>Confirm ROI</button>
         </div>
       </aside>
     </div>
   );
 }
 
-function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, onSubmit }) {
+function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, onSubmit, sourceMode }) {
   const canvasRef = useRef(null);
   const [activeLaneId, setActiveLaneId] = useState(lanes[0]?.id || "");
   const [mode, setMode] = useState("zone");
@@ -463,7 +657,7 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
         <SettingsPanel settings={settings} setSettings={setSettings} />
         <div className="button-row">
           <button className="secondary-button" onClick={onBack}>Back</button>
-          <button className="primary-button" disabled={!canSubmit} onClick={() => onSubmit(lanes)}>Submit Task</button>
+          <button className="primary-button" disabled={!canSubmit} title={canSubmit ? "Validate geometry and continue" : "Draw each lane zone, counting line, and direction arrow first"} onClick={() => onSubmit(lanes)}>{sourceMode === "live" ? "Validate Live Config" : "Submit Batch Task"}</button>
         </div>
       </aside>
     </div>
@@ -511,10 +705,14 @@ function SettingsPanel({ settings, setSettings }) {
   );
 }
 
-function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, onJson, appendLog }) {
+function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
   const startedRef = useRef(taskStatus.startedAt || Date.now());
+  const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveBusy, setLiveBusy] = useState(false);
 
   useEffect(() => {
+    if (sourceMode === "live") return undefined;
     let cancelled = false;
     const interval = window.setInterval(async () => {
       const elapsed = Date.now() - startedRef.current;
@@ -522,7 +720,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       const statusPayload = await pollTask(taskId, fallbackProgress);
       if (cancelled) return;
       setTaskStatus(statusPayload);
-      if (statusPayload.status === "succeeded") {
+      if (statusPayload.status === "succeeded" || statusPayload.status === "completed") {
         window.clearInterval(interval);
         const nextResult = await fetchResult(taskId);
         if (!cancelled) {
@@ -535,11 +733,111 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, setResult, setTaskStatus, taskId]);
+  }, [appendLog, setResult, setTaskStatus, taskId, sourceMode]);
+
+  useEffect(() => {
+    if (liveSource?.resolved_url || liveSource?.source_url) {
+      setLiveUrl(liveSource.resolved_url || liveSource.source_url);
+    }
+  }, [liveSource]);
+
+  useEffect(() => {
+    if (!liveSession?.session_id) return;
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      const next = await fetchLiveSession(liveSession.session_id);
+      if (!cancelled && next) setLiveSession(next);
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [liveSession?.session_id]);
+
+  async function startLiveSession() {
+    if (!liveUrl.trim() || !submittedConfig) return;
+    setLiveBusy(true);
+    appendLog(`starting live source: ${liveUrl.trim()}`);
+    try {
+      const session = await createLiveSession(liveUrl.trim(), submittedConfig);
+      setLiveSession(session);
+      appendLog(`live session: ${session?.session_id || "failed"}`);
+    } catch (error) {
+      appendLog(`live start failed: ${error.message}`);
+    } finally {
+      setLiveBusy(false);
+    }
+  }
+
+  async function stopLiveSession() {
+    if (!liveSession?.session_id) return;
+    appendLog(`stopping live session: ${liveSession.session_id.slice(0, 8)}`);
+    await stopLive(liveSession.session_id);
+    setLiveSession((current) => current ? { ...current, status: "stopping" } : current);
+  }
+
+  async function clearLiveSession() {
+    if (!liveSession?.session_id) return;
+    const sessionId = liveSession.session_id;
+    await removeLive(sessionId);
+    setLiveSession(null);
+    appendLog(`live session removed: ${sessionId.slice(0, 8)}`);
+  }
 
   const visibleResult = result || emptyResult;
   const progress = taskStatus.progress ?? 0;
   const laneRows = Object.entries(visibleResult.counts || {});
+  const liveReady = sourceMode === "live" && Boolean(submittedConfig);
+  const liveStatusLabel = liveSession?.status || (liveReady ? "ready_to_start" : "configure_geometry");
+  const liveStatusHint = liveSession?.session_id
+    ? `Session ${liveSession.session_id.slice(0, 8)} · ${liveSession.frames_processed || 0} processed / ${liveSession.frames_read || 0} read`
+    : liveReady
+      ? "Geometry valid — click Start Live to begin inference."
+      : "Resolve a source and draw ROI, lanes, counting line, and direction vector first.";
+  const liveFrameUrl = liveSession?.session_id
+    ? `/live/sessions/${liveSession.session_id}/stream`
+    : null;
+  const liveReadinessItems = [
+    {
+      label: "Live source resolved",
+      ready: sourceMode === "live" && Boolean(liveSource?.source_id),
+      detail: liveSource?.source_type || "Use Resolve Source before annotation",
+    },
+    {
+      label: "Stream URL available",
+      ready: Boolean(liveUrl.trim()),
+      detail: liveUrl.trim() ? "Ready for backend session start" : "Paste or resolve HLS/MJPEG/RTSP URL",
+    },
+    {
+      label: "ROI and lanes validated",
+      ready: Boolean(submittedConfig),
+      detail: submittedConfig ? `${submittedConfig.lanes?.length || 0} lane config ready` : "Complete ROI, lane zone, line, and direction vector",
+    },
+    {
+      label: "Session slot clear",
+      ready: !liveSession?.session_id || ["stopped", "failed", "completed"].includes(liveSession.status),
+      detail: liveSession?.session_id ? `Current session is ${liveSession.status}` : "No active live session",
+    },
+  ];
+  const liveChecklistReady = liveReadinessItems.every((item) => item.ready);
+  const liveDebugRows = [
+    ["source", sourceMode === "live" ? (liveSource?.source_type || "live") : "batch"],
+    ["session", liveSession?.session_id?.slice(0, 8) || "--"],
+    ["status", liveSession?.status || taskStatus.status || "idle"],
+    ["stage", taskStatus.stage || "--"],
+    ["model", liveSession?.model_name?.split("/").pop() || "--"],
+    ["roi_mode", liveSession?.roi_mode || "--"],
+    ["imgsz", liveSession?.ai_imgsz || "--"],
+    ["last_error", liveSession?.last_error || taskStatus.stage_detail || "--"],
+  ];
+  const canStartLive = liveChecklistReady && !liveBusy;
+  const liveStartTitle = !submittedConfig
+    ? "Validate ROI/lane/counting geometry before starting live inference"
+    : !liveUrl.trim()
+      ? "Paste a resolved HLS/MJPEG/RTSP/direct URL"
+      : !liveChecklistReady
+        ? "Complete the live readiness checklist before starting"
+      : "Start realtime inference on the configured stream";
 
   return (
     <div className="dashboard-grid">
@@ -549,20 +847,82 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
             <p className="eyebrow">Async worker stream</p>
             <h2>Analytics Dashboard</h2>
           </div>
-          <span className="meta-pill">{taskStatus.status || "queued"}</span>
+          <span className={`meta-pill status-${sourceMode === "live" ? liveStatusLabel : (taskStatus.status || "queued")}`}>{sourceMode === "live" ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")}</span>
         </div>
-        <video className="video-player" src={visibleResult.outputs?.video_path || videoUrl} controls muted />
+        {sourceMode === "live" ? (
+          liveFrameUrl ? (
+            <img className="video-player live-output" src={liveFrameUrl} alt="Live annotated inference output" />
+          ) : (
+            <div className="video-player live-placeholder">Live output appears here after the first inferred frame.</div>
+          )
+        ) : (
+          <video className="video-player" src={visibleResult.outputs?.video_path || videoUrl} controls muted />
+        )}
         <div className="progress-track">
           <div style={{ width: `${progress}%` }} />
+        </div>
+        <div className="output-summary">
+          <Metric label="Output Mode" value={sourceMode === "live" ? "Live stream" : "Batch video"} small />
+          <Metric label="Runtime State" value={sourceMode === "live" ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")} small />
+          <Metric label="Frame Health" value={sourceMode === "live" && liveSession ? `${liveSession.frames_processed}/${liveSession.frames_read}` : `${visibleResult.frames}/${visibleResult.total_frames}`} small />
         </div>
       </section>
       <aside className="metrics-panel">
         <Metric label="Task ID" value={taskId || "mock-task"} small />
         <Metric label="Progress" value={`${progress}%`} />
+        <Metric label="Stage" value={taskStatus.stage || taskStatus.status || "--"} />
         <Metric label="Frames" value={`${visibleResult.frames}/${visibleResult.total_frames}`} />
         <Metric label="Total Count" value={visibleResult.total_count} />
         <button className="secondary-button full" onClick={onJson}>View JSON</button>
       </aside>
+      <section className="live-panel">
+        <div className="panel-header compact">
+          <div>
+            <p className="eyebrow">Realtime source</p>
+            <h3>Live Traffic Test</h3>
+          </div>
+          <span className="meta-pill">{liveStatusLabel}</span>
+        </div>
+        <p className="hint-text">{liveStatusHint}</p>
+        <div className="readiness-card" aria-label="Live readiness checklist">
+          <div className="readiness-card-header">
+            <span>Start readiness</span>
+            <strong>{liveChecklistReady ? "Ready" : "Blocked"}</strong>
+          </div>
+          {liveReadinessItems.map((item) => (
+            <div className={`readiness-item ${item.ready ? "ready" : "blocked"}`} key={item.label}>
+              <span className="material-symbols-outlined">{item.ready ? "check_circle" : "radio_button_unchecked"}</span>
+              <div>
+                <strong>{item.label}</strong>
+                <small>{item.detail}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="live-controls">
+          <input
+            value={liveUrl}
+            onChange={(event) => setLiveUrl(event.target.value)}
+            placeholder="Paste HLS/MJPEG/RTSP/direct video URL"
+            title="Resolved stream URL. For YouTube, use Resolve Source in step 1 first."
+          />
+          <button className="primary-button" disabled={!canStartLive} title={liveStartTitle} onClick={startLiveSession}>{liveBusy ? "Starting..." : "Start Live"}</button>
+          <button className="secondary-button" disabled={!liveSession?.session_id || liveSession.status === "stopping"} title="Stop inference but keep the latest session metrics visible" onClick={stopLiveSession}>Stop</button>
+          <button className="secondary-button danger-lite" disabled={!liveSession?.session_id} title="Delete the live session from backend memory and clear this panel" onClick={clearLiveSession}>Clear Session</button>
+        </div>
+        <div className="live-metrics">
+          <Metric label="Live FPS" value={liveSession?.fps ?? "--"} small />
+          <Metric label="Frames" value={liveSession ? `${liveSession.frames_processed}/${liveSession.frames_read}` : "--"} small />
+          <Metric label="Dropped" value={liveSession?.frames_dropped ?? "--"} small />
+          <Metric label="Lane Volume" value={liveSession?.lane_volume_total ?? "--"} small />
+          <Metric label="Unique" value={liveSession?.global_unique_count ?? "--"} small />
+          <Metric label="Multi Lane" value={liveSession?.multi_lane_track_count ?? "--"} small />
+          <Metric label="Model" value={liveSession?.model_name?.split("/").pop() ?? "--"} small />
+          <Metric label="ROI Mode" value={liveSession?.roi_mode ?? "--"} small />
+          <Metric label="Img Size" value={liveSession?.ai_imgsz ?? "--"} small />
+        </div>
+        {liveSession?.last_error && <p className="error-text">{liveSession.last_error}</p>}
+      </section>
       <section className="chart-panel">
         <div className="panel-header compact">
           <div>
@@ -574,13 +934,33 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
           <LaneBars key={laneId} laneId={laneId} counts={counts} max={Math.max(1, visibleResult.total_count)} />
         ))}
       </section>
-      <section className="console-panel">
+      <section className="debug-panel">
+        <div className="panel-header compact">
+          <div>
+            <p className="eyebrow">Runtime debug</p>
+            <h3>Session State</h3>
+          </div>
+        </div>
+        <div className="debug-grid">
+          {liveDebugRows.map(([label, value]) => (
+            <div className="debug-row" key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="console-panel" id="system-logs">
         <Terminal
           lines={[
             `> [status: ${taskStatus.status || "queued"}]`,
+            `> source_mode=${sourceMode || "video"}`,
+            `> stage=${taskStatus.stage || "--"}`,
+            `> detail=${taskStatus.stage_detail || "--"}`,
             `> task_id=${taskId || "mock-task"}`,
             `> lanes=${submittedConfig?.lanes?.length ?? 0}`,
             `> progress=${progress}`,
+            `> live=${liveSession?.status || "idle"} fps=${liveSession?.fps ?? "--"}`,
           ]}
         />
       </section>
@@ -672,6 +1052,36 @@ async function fetchPreview(taskId, file, localVideoUrl) {
   return extractFrameFromVideo(file, localVideoUrl);
 }
 
+async function resolveLiveSource(url) {
+  try {
+    const response = await fetch("/live/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) return payload;
+    return { error: payload.detail || "Could not resolve live source" };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+async function validateLiveConfig(config) {
+  try {
+    const response = await fetch("/live/validate-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lane_config: config }),
+    });
+    if (response.ok) return response.json();
+    const payload = await response.json().catch(() => ({}));
+    return { valid: false, errors: payload.detail?.errors || payload.errors || [payload.detail || "Validation failed"] };
+  } catch (error) {
+    return { valid: false, errors: [String(error)] };
+  }
+}
+
 async function submitTask(taskId, config) {
   try {
     const response = await fetch("/tasks", {
@@ -709,6 +1119,47 @@ async function fetchResult(taskId) {
   return emptyResult;
 }
 
+async function createLiveSession(sourceUrl, laneConfig) {
+  try {
+    const response = await fetch("/live/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
+    });
+    if (response.ok) return response.json();
+    const payload = await response.json().catch(() => ({}));
+    return { status: "failed", last_error: payload.detail || "Could not start live session" };
+  } catch (error) {
+    return { status: "failed", last_error: String(error) };
+  }
+}
+
+async function fetchLiveSession(sessionId) {
+  try {
+    const response = await fetch(`/live/sessions/${sessionId}`);
+    if (response.ok) return response.json();
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function stopLive(sessionId) {
+  try {
+    await fetch(`/live/sessions/${sessionId}`, { method: "DELETE" });
+  } catch {
+    // Ignore stop failures in demo mode.
+  }
+}
+
+async function removeLive(sessionId) {
+  try {
+    await fetch(`/live/sessions/${sessionId}/remove`, { method: "DELETE" });
+  } catch {
+    // Ignore remove failures in demo mode.
+  }
+}
+
 function createLane(index) {
   return {
     id: createId(),
@@ -740,13 +1191,21 @@ function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile }) {
       height: preview.height,
     },
     roi_polygon: roi.polygon.map((point) => [round(point.x), round(point.y)]),
+    processing_roi: {
+      type: "rectangle",
+      x: round(crop.sourceRect.x),
+      y: round(crop.sourceRect.y),
+      width: round(crop.sourceRect.width),
+      height: round(crop.sourceRect.height),
+      purpose: "inference_processing",
+    },
     annotation_roi: {
       type: "rectangle",
       x: round(crop.sourceRect.x),
       y: round(crop.sourceRect.y),
       width: round(crop.sourceRect.width),
       height: round(crop.sourceRect.height),
-      purpose: "frontend_annotation_only",
+      purpose: "legacy_processing_roi",
     },
     method: "counting_gate",
     settings,
@@ -774,24 +1233,35 @@ function defaultRoi(preview) {
   ];
 }
 
-function drawRoiCanvas(canvas, preview, vertices) {
+function drawRoiCanvas(canvas, preview, vertices, cropRect, selectedIndex) {
   if (!canvas || !preview?.image) return;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(preview.image, 0, 0, canvas.width, canvas.height);
 
-  ctx.save();
-  ctx.fillStyle = "rgba(38, 37, 30, 0.48)";
-  ctx.beginPath();
-  ctx.rect(0, 0, canvas.width, canvas.height);
-  ctx.moveTo(vertices[0].x, vertices[0].y);
-  vertices.forEach((point) => ctx.lineTo(point.x, point.y));
-  ctx.closePath();
-  ctx.fill("evenodd");
-  ctx.restore();
+  if (vertices.length >= 3) {
+    ctx.save();
+    ctx.fillStyle = "rgba(38, 37, 30, 0.48)";
+    ctx.beginPath();
+    ctx.rect(0, 0, canvas.width, canvas.height);
+    ctx.moveTo(vertices[0].x, vertices[0].y);
+    vertices.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.closePath();
+    ctx.fill("evenodd");
+    ctx.restore();
+  }
+
+  if (cropRect) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.setLineDash([10, 7]);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
+    ctx.restore();
+  }
 
   drawPolygon(ctx, vertices, "#f54e00", "rgba(245, 78, 0, 0.1)");
-  vertices.forEach((point, index) => drawHandle(ctx, point, index + 1, "#f54e00"));
+  vertices.forEach((point, index) => drawHandle(ctx, point, index + 1, index === selectedIndex ? "#26251e" : "#f54e00"));
 }
 
 function drawLaneCanvas(canvas, crop, lanes, activeLaneId, mode, draft) {
