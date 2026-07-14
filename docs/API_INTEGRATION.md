@@ -1,156 +1,87 @@
-# TrafficFlow Serving — API Integration Guide
+# TrafficFlow — API Cập Nhật (2026-07-10)
 
-## Base URL
+## Kiến trúc mới: Local Docker + GPU
 
-```
-https://tienpm205--trafficflow-inference-fastapi-app.modal.run
-```
+Hệ thống đã chuyển từ **Modal GPU inference** sang **local Docker với GPU acceleration**.
 
-> Hosted on Modal (serverless GPU). Container auto-spins on request, idle timeout 5 min.
-> No authentication required. CORS open to all origins.
+### Thay đổi lớn
 
----
+| Thành phần | Trước (cũ) | Sau (mới) |
+|-----------|-----------|----------|
+| Inference | Modal GPU server (`tienpm205--trafficflow-inference-fastapi-app.modal.run`) | **Local YOLO** (CUDA GPU) |
+| Deploy | `python -m api.main` + `celery worker` | **Docker Compose** (3 services) |
+| Worker pool | `--pool=solo` | `--pool=prefork --concurrency=2` |
+| Upload | Single HTTP POST | **Chunked upload** với resume |
+| Docker image | `python:3.10-slim` (9.76GB) | `python:3.12-slim` + **torch CUDA** (18.1GB) |
+| Model serving | `/v1/detect` via Modal | **`LocalInferenceClient`** (autodetect GPU/CPU) |
 
-## Endpoints
+### Tại sao chuyển?
 
-### Health Check
-
-```
-GET /v1/health
-```
-
-Response `200`:
-```json
-{ "status": "ok" }
-```
+1. **`cv::gemm` crash**: OpenCV 5.0.0 trên Modal server crash với ONNX YOLO model — tất cả detection fail
+2. **Độ trễ network**: Mỗi frame phải upload lên Modal → 3-5s latency mỗi request
+3. **Chi phí**: GPU local RTX 5070 Ti (có sẵn) → nhanh hơn + không tốn Modal credit
+4. **ROI crop**: Frame sau khi crop chỉ còn ~640px → không cần GPU server mạnh
 
 ---
 
-### Create Session
+## API mới
+
+### Chunked Upload (mới)
 
 ```
-POST /v1/session
+POST /api/v1/upload/video/chunk
 ```
+Fields: `upload_id`, `chunk_index`, `total_chunks`, `filename`, `file`
 
-Response `200`:
-```json
-{ "session_id": "a1b2c3d4e5f6g7h8" }
 ```
-
-> Use this if you want to pre-allocate a session before sending frames.
-> Otherwise, POST /detect with an empty `session_id` will auto-create one.
+POST /api/v1/upload/video/chunk/{upload_id}/complete
+```
+Ghép tất cả chunks → upload R2 → tạo task document.
 
 ---
 
-### Delete Session
+## Docker Compose
 
-```
-DELETE /v1/session/{session_id}
-```
-
-Response `200`:
-```json
-{ "status": "deleted" }
+```yaml
+services:
+  redis:    # Message broker
+  api:      # FastAPI + React (port 8000)
+  worker:   # Celery + YOLO GPU (runtime: nvidia, prefork x2)
 ```
 
-> Clean up sessions when a video stream ends to free GPU memory.
+### Biến môi trường mới
 
----
-
-### Detect Objects
-
-```
-POST /v1/detect
-Content-Type: multipart/form-data
-```
-
-#### Request Fields
-
-| Field        | Type   | Required | Description |
-|-------------|--------|----------|-------------|
-| `image`      | file   | ✅       | JPEG/PNG frame image |
-| `session_id` | string | ❌       | Tracking session ID. Leave empty to auto-create |
-| `confidence` | float  | ❌       | Override confidence threshold for this request |
-
-#### cURL Example
-
-```bash
-curl -X POST https://tienpm205--trafficflow-inference-fastapi-app.modal.run/v1/detect \
-  -F "image=@frame.jpg" \
-  -F "session_id=video_1"
-```
-
-#### Response `200`
-
-```json
-{
-  "session_id": "video_1",
-  "detections": [
-    {
-      "track_id": 1,
-      "class_id": 2,
-      "class_name": "car",
-      "confidence": 0.93,
-      "bbox_xyxy": [100.5, 200.3, 250.1, 350.7]
-    }
-  ]
-}
-```
-
-| Field                  | Type                | Description |
-|------------------------|---------------------|-------------|
-| `session_id`           | string              | Same session_id sent in request (or newly created) |
-| `detections[].track_id`| int                 | Unique object ID, persistent across frames in same session |
-| `detections[].class_id`| int                 | COCO class ID |
-| `detections[].class_name`| string            | One of: `car`, `bus`, `truck`, `motorcycle`, `motorbike` |
-| `detections[].confidence`| float             | Detection confidence (0–1) |
-| `detections[].bbox_xyxy`| [x1, y1, x2, y2]  | Bounding box in pixel coordinates (top-left, bottom-right) |
-
-#### Error Responses
-
-| Status | Body |
-|--------|------|
-| `400`  | `{ "detail": "Invalid image data" }` |
-| `500`  | `{ "detail": "Internal server error" }` |
-
----
-
-## Session & Tracking Behavior
-
-| Concept | Detail |
-|---------|--------|
-| **Session** | One `YOLO + ByteTrack` instance per session ID |
-| **Persistence** | Same `session_id` across frames → same `track_id` for same object |
-| **TTL** | Session auto-evicted after 600s (10 min) of inactivity |
-| **Max sessions** | 32 concurrent sessions; oldest evicted when full |
-
-```
-Frame 1 → POST /detect (session_id="video_1") → track_id=1, track_id=2
-Frame 2 → POST /detect (session_id="video_1") → track_id=1, track_id=2 (same IDs)
-Frame 3 → POST /detect (session_id="video_1") → track_id=1, track_id=2, track_id=3
+```env
+CALLBACK_HOST=http://api:8000    # Worker gọi callback qua internal Docker network
+AI_LOCAL=true                     # Bắt buộc: dùng local YOLO thay Modal
 ```
 
 ---
 
-## Python Integration Example
+## File đã thay đổi
 
-```python
-import requests
+| File | Thay đổi |
+|------|----------|
+| `Dockerfile` | Multi-stage: Node FE → Python 3.12 + torch CUDA |
+| `docker-compose.yml` | GPU device reservation, prefork, CALLBACK_HOST |
+| `.dockerignore` | Clean exclude patterns |
+| `src/worker/pipeline/local_client.py` | **Mới** — YOLO local GPU/CPU |
+| `src/worker/celery_app.py` | Switch `InferenceClient` → `LocalInferenceClient` khi `AI_LOCAL=true` |
+| `src/api/routes/frontend_compat.py` | Fix: lưu lane_config, truyền BackgroundTasks |
+| `src/api/routes/tasks.py` | Fix: CALLBACK_HOST, strip ObjectId, serializable config |
+| `src/api/routes/upload.py` | **Mới**: chunked upload endpoints |
+| `src/shared/config.py` | Default MAX_FILE_SIZE_MB=2048 |
+| `.env` | AI_LOCAL=true, MAX_FILE_SIZE_MB=2048 |
+| `docs/README.md` | Rewrite: kiến trúc mới |
+| `docs/HUONG_DAN_SU_DUNG.md` | Rewrite: full guide |
+| `docs/API_INTEGRATION.md` | Unchanged (Modal reference) |
 
-BASE = "https://tienpm205--trafficflow-inference-fastapi-app.modal.run"
+---
 
-with open("frame.jpg", "rb") as f:
-    resp = requests.post(
-        f"{BASE}/v1/detect",
-        files={"image": f},
-        data={"session_id": "video_1"},
-    )
+## Performance
 
-print(resp.json())
-# {
-#   "session_id": "video_1",
-#   "detections": [
-#     {"track_id": 1, "class_id": 2, "class_name": "car", "confidence": 0.93, "bbox_xyxy": [100.5, 200.3, 250.1, 350.7]}
-#   ]
-# }
-```
+| Metric | CPU | GPU (RTX 5070 Ti) |
+|--------|-----|-------------------|
+| 10-frame test video | ~3s | **~0.5s** |
+| 4K video (3300 frames, ROI crop) | ~25-50 phút | **~2-5 phút** |
+| VRAM usage | N/A | <1GB (YOLOv8n) |

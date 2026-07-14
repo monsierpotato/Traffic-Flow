@@ -1,6 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from lib.database import get_database
+from shared.database import get_database
 from api.schemas.lane import LaneConfigRequest, LaneConfigResponse
 
 router = APIRouter()

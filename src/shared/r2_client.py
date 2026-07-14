@@ -1,9 +1,10 @@
 import os
 import logging
 from pathlib import Path
+import shutil
 import boto3
 from botocore.config import Config
-from lib.config import settings
+from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,30 @@ class R2Client:
                 return f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/{settings.R2_BUCKET_NAME}/{key}"
         except Exception as e:
             logger.error(f"Failed to upload file to R2: {str(e)}")
+            raise e
+
+    def upload_path(self, source_path: str | Path, key: str, content_type: str = "binary/octet-stream") -> str:
+        """Uploads a local file path without loading the whole file into memory."""
+        source = Path(source_path)
+        if self.is_mocked:
+            local_path = self.local_storage_dir / key
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, local_path)
+            return f"{settings.R2_PUBLIC_URL}/{key}"
+
+        try:
+            with source.open("rb") as fp:
+                self.s3_client.upload_fileobj(
+                    fp,
+                    self.bucket_name,
+                    key,
+                    ExtraArgs={"ContentType": content_type},
+                )
+            if settings.R2_PUBLIC_URL:
+                return f"{settings.R2_PUBLIC_URL.rstrip('/')}/{key}"
+            return f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/{settings.R2_BUCKET_NAME}/{key}"
+        except Exception as e:
+            logger.error(f"Failed to upload file path to R2: {str(e)}")
             raise e
 
     def download_file(self, key: str) -> bytes:

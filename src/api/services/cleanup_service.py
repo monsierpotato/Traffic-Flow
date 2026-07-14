@@ -1,9 +1,18 @@
 import logging
 from datetime import datetime
-from lib.database import db_instance
-from lib.r2_client import r2_client
+from shared.database import db_instance
+from shared.r2_client import r2_client
 
 logger = logging.getLogger(__name__)
+
+
+def _delete_key(key: str, label: str):
+    if not key:
+        return
+    try:
+        r2_client.delete_file(key)
+    except Exception as e:
+        logger.warning(f"Could not delete {label} {key}: {str(e)}")
 
 async def run_data_cleanup():
     """Finds expired tasks, deletes associated video/preview files from Cloudflare R2,
@@ -36,34 +45,27 @@ async def run_data_cleanup():
         video_id = task["video_id"]
         logger.info(f"Cleaning files for task {task_id} (video {video_id})")
 
-        # 1. Delete original video
-        video_key = f"uploads/{video_id}.mp4"
-        try:
-            r2_client.delete_file(video_key)
-        except Exception as e:
-            logger.warning(f"Could not delete original video {video_key}: {str(e)}")
-
-        # 2. Delete preview frame
-        preview_key = f"previews/{video_id}.jpg"
-        try:
-            r2_client.delete_file(preview_key)
-        except Exception as e:
-            logger.warning(f"Could not delete preview frame {preview_key}: {str(e)}")
+        # 1. Delete upload and preview assets. Prefer metadata keys, keep legacy fallbacks.
+        keys = {
+            task.get("original_video_key"),
+            task.get("working_video_key"),
+            task.get("preview_key"),
+            f"uploads/{video_id}.mp4",
+            f"uploads/{video_id}_1080p.mp4",
+            f"previews/{video_id}.jpg",
+        }
+        for key in keys:
+            _delete_key(key, "task asset")
 
         # 3. Delete result video and events if task was completed
         if task.get("result_video_url"):
-            result_video_key = f"results/{task_id}/output.mp4"
-            try:
-                r2_client.delete_file(result_video_key)
-            except Exception as e:
-                logger.warning(f"Could not delete result video {result_video_key}: {str(e)}")
+            result_video_key = task.get("result_video_key") or f"results/{task_id}.mp4"
+            _delete_key(result_video_key, "result video")
+            _delete_key(f"results/{task_id}/output.mp4", "legacy result video")
 
         if task.get("events_url"):
-            events_key = f"results/{task_id}/events.jsonl"
-            try:
-                r2_client.delete_file(events_key)
-            except Exception as e:
-                logger.warning(f"Could not delete events log {events_key}: {str(e)}")
+            events_key = task.get("events_key") or f"results/{task_id}/events.jsonl"
+            _delete_key(events_key, "events log")
 
         # 4. Update MongoDB Task document: clear file references and mark as archived
         await db.tasks.update_one(
@@ -71,6 +73,8 @@ async def run_data_cleanup():
             {
                 "$set": {
                     "video_url": None,
+                    "working_video_url": None,
+                    "original_video_url": None,
                     "preview_url": None,
                     "result_video_url": None,
                     "events_url": None,

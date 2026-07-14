@@ -21,6 +21,13 @@ def _iou_xyxy(a: List[float], b: List[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _valid_bbox_xyxy(bbox: List[float]) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return np.isfinite([x1, y1, x2, y2]).all() and x2 > x1 and y2 > y1
+
+
 # ---------------------------------------------------------------------------
 # Single-track Kalman filter
 # ---------------------------------------------------------------------------
@@ -70,7 +77,8 @@ class _TrackKF:
         x1, y1, x2, y2 = bbox_xyxy
         cx = (x1 + x2) * 0.5; cy = (y1 + y2) * 0.5
         w = x2 - x1; h = y2 - y1
-        self.kf.correct(np.array([cx, cy, w, h], np.float32))
+        measurement = np.array([[cx], [cy], [w], [h]], dtype=np.float32)
+        self.kf.correct(measurement)
         self.lost_frames = 0
         self.age += 1
 
@@ -152,6 +160,8 @@ class LocalTracker:
         Returns:
             List of ``TrackOutput`` — one per active + non-expired lost track.
         """
+        detections = [d for d in detections if _valid_bbox_xyxy(d.get("bbox_xyxy"))]
+
         # --- 1. Kalman predict all existing tracks forward ---
         predicted = {}
         for tid, kf in self._tracks.items():

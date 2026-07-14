@@ -1,14 +1,120 @@
-import uuid
+import json
+import os
+import tempfile
 from pathlib import Path
-from datetime import datetime, timedelta
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Request, status
-from lib.database import get_database
-from lib.r2_client import r2_client
+from datetime import datetime
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Request, status, Form
+from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
-from api.services.video_service import extract_first_frame
+from api.services.upload_service import create_uploaded_video_task_from_path
 from api.schemas.upload import UploadResponse
 
 router = APIRouter()
+
+# --- Chunked upload ---
+
+CHUNK_DIR = Path("storage/chunks")
+
+
+async def _save_upload_to_temp(file: UploadFile) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "video.mp4").suffix or ".mp4")
+    try:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            temp_file.write(chunk)
+        temp_file.close()
+        return temp_file.name
+    except Exception:
+        temp_file.close()
+        if os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+        raise
+
+
+@router.post("/video/chunk")
+async def upload_chunk(
+    request: Request,
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    filename: str = Form(...),
+    file: UploadFile = File(...),
+):
+    CHUNK_DIR.mkdir(parents=True, exist_ok=True)
+    upload_dir = CHUNK_DIR / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    chunk_path = upload_dir / f"{chunk_index:06d}"
+    chunk_bytes = await file.read()
+    chunk_path.write_bytes(chunk_bytes)
+
+    # Save metadata on first chunk
+    meta_path = upload_dir / "meta.json"
+    if not meta_path.exists():
+        meta_path.write_text(json.dumps({
+            "filename": filename,
+            "total_chunks": total_chunks,
+            "created_at": datetime.utcnow().isoformat(),
+        }))
+
+    return {"upload_id": upload_id, "chunk": chunk_index, "status": "ok"}
+
+
+@router.post("/video/chunk/{upload_id}/complete")
+async def complete_chunked_upload(request: Request, upload_id: str, db=Depends(get_database)):
+    upload_dir = CHUNK_DIR / upload_id
+    if not upload_dir.exists():
+        raise HTTPException(404, "Upload session not found")
+
+    meta_path = upload_dir / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(400, "Missing metadata")
+
+    meta = json.loads(meta_path.read_text())
+    total_chunks = meta["total_chunks"]
+    filename = meta.get("filename", "video.mp4")
+
+    # Reassemble
+    chunks = sorted(upload_dir.glob("*"))
+    chunks = [c for c in chunks if c.name.isdigit()]
+    if len(chunks) != total_chunks:
+        raise HTTPException(400, f"Missing chunks: {len(chunks)}/{total_chunks}")
+
+    temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix or ".mp4")
+    temp_path = temp_video.name
+    try:
+        for chunk in chunks:
+            with chunk.open("rb") as fp:
+                while True:
+                    data = fp.read(1024 * 1024)
+                    if not data:
+                        break
+                    temp_video.write(data)
+        temp_video.close()
+
+        uploaded = await create_uploaded_video_task_from_path(
+            request=request,
+            db=db,
+            video_path=temp_path,
+            content_type="video/mp4",
+        )
+    finally:
+        temp_video.close()
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        import shutil
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+    return UploadResponse(
+        video_id=uploaded.video_id,
+        preview_url=uploaded.preview_url,
+        message=f"Video uploaded (normalized {uploaded.working_meta.width}x{uploaded.working_meta.height}) and preview generated successfully.",
+    )
+
+
+# --- Original single-file upload ---
 
 @router.post("/video", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_video(
@@ -19,76 +125,23 @@ async def upload_video(
     """Uploads video file, extracts first frame, saves both to Cloudflare R2,
     and initializes a task document in MongoDB.
     """
-    video_id = str(uuid.uuid4())
-    task_id = str(uuid.uuid4())
-    
     try:
-        # 1. Read file bytes
-        video_bytes = await file.read()
-        
-        # 2. Upload video to R2
-        video_key = f"uploads/{video_id}.mp4"
-        video_url = r2_client.upload_file(
-            file_content=video_bytes,
-            key=video_key,
-            content_type=file.content_type or "video/mp4"
-        )
-        
-        # 3. Extract preview frame
+        temp_path = await _save_upload_to_temp(file)
         try:
-            preview_bytes = extract_first_frame(video_bytes)
-        except Exception as e:
-            # Clean up uploaded video if extraction fails
-            r2_client.delete_file(video_key)
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Could not extract preview frame from video: {str(e)}"
+            uploaded = await create_uploaded_video_task_from_path(
+                request=request,
+                db=db,
+                video_path=temp_path,
+                content_type=file.content_type or "video/mp4",
             )
-            
-        # 4. Upload preview frame to R2
-        preview_key = f"previews/{video_id}.jpg"
-        r2_client.upload_file(
-            file_content=preview_bytes,
-            key=preview_key,
-            content_type="image/jpeg"
-        )
-
-        # 5. Also save preview locally for frontend display
-        local_preview_dir = Path("storage/previews")
-        local_preview_dir.mkdir(parents=True, exist_ok=True)
-        local_preview_path = local_preview_dir / f"{video_id}.jpg"
-        local_preview_path.write_bytes(preview_bytes)
-
-        # Build local preview URL that works via /static/ mount
-        base_url = str(request.base_url).rstrip("/")
-        local_preview_url = f"{base_url}/static/previews/{video_id}.jpg"
-        
-        # 6. Create Task document in MongoDB
-        now = datetime.utcnow()
-        from backend.config import settings
-        expires_at = now + timedelta(days=settings.RETENTION_DAYS)
-        
-        task_doc = {
-            "task_id": task_id,
-            "video_id": video_id,
-            "status": "uploaded",
-            "progress": 0,
-            "video_url": video_url,
-            "preview_url": local_preview_url,
-            "result_video_url": None,
-            "events_url": None,
-            "error_message": None,
-            "created_at": now,
-            "updated_at": now,
-            "expires_at": expires_at
-        }
-        
-        await db.tasks.insert_one(task_doc)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
         
         return UploadResponse(
-            video_id=video_id,
-            preview_url=local_preview_url,
-            message="Video uploaded and preview generated successfully."
+            video_id=uploaded.video_id,
+            preview_url=uploaded.preview_url,
+            message=f"Video uploaded (normalized {uploaded.working_meta.width}x{uploaded.working_meta.height}) and preview generated successfully."
         )
         
     except HTTPException as he:

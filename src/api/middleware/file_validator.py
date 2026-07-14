@@ -1,6 +1,6 @@
 import os
 from fastapi import UploadFile, HTTPException, status
-from lib.config import settings
+from shared.config import settings
 
 def validate_video_file(file: UploadFile) -> UploadFile:
     """Validates the uploaded file size, extension and mime type."""

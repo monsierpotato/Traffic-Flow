@@ -28,9 +28,11 @@ class ConfigSession:
         camera_id: str,
         display_max_size: int,
         annotation_roi: Optional[AnnotationRoi] = None,
+        roi_polygon: Optional[List[Point]] = None,
     ):
         self.frame = frame
         self.annotation_roi = annotation_roi
+        self.roi_polygon = roi_polygon
         self.annotation_frame = _crop_frame(frame, annotation_roi) if annotation_roi else frame
         self.display_frame, self.display_scale = _make_display_frame(self.annotation_frame, display_max_size)
         self.output_path = output_path
@@ -181,6 +183,8 @@ class ConfigSession:
                 "height": round(self.annotation_roi.height),
                 "purpose": "frontend_annotation_only",
             }
+        if self.roi_polygon:
+            payload["roi_polygon"] = [[round(x), round(y)] for x, y in self.roi_polygon]
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -311,6 +315,62 @@ def select_annotation_roi(frame, display_max_size: int) -> AnnotationRoi:
     )
 
 
+def select_roi_polygon(frame, display_max_size: int) -> List[Point]:
+    preview, scale = _make_display_frame(frame, display_max_size)
+    points: List[Point] = []
+    window = "Select polygon ROI: click points, Enter saves, R undo, Esc cancel"
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        if event == cv2.EVENT_LBUTTONDOWN:
+            points.append((round(x / scale), round(y / scale)))
+
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window, on_mouse)
+    while True:
+        canvas = preview.copy()
+        display_points = [tuple(_scale_point(point, scale)) for point in points]
+        if display_points:
+            for point in display_points:
+                cv2.circle(canvas, point, 5, (0, 120, 255), -1)
+            for start, end in zip(display_points, display_points[1:]):
+                cv2.line(canvas, start, end, (0, 120, 255), 2)
+            if len(display_points) >= 3:
+                cv2.line(canvas, display_points[-1], display_points[0], (0, 120, 255), 2)
+        cv2.putText(
+            canvas,
+            "Click ROI polygon points. Enter=save, R=undo, Esc=cancel.",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (20, 240, 255),
+            2,
+        )
+        cv2.imshow(window, canvas)
+        key = cv2.waitKey(30) & 0xFF
+        if key in (13, 10):
+            if len(points) < 3:
+                print("ROI polygon needs at least 3 points.")
+                continue
+            cv2.destroyWindow(window)
+            return points
+        if key == 27:
+            cv2.destroyWindow(window)
+            raise RuntimeError("ROI polygon selection cancelled.")
+        char = chr(key) if key < 128 else ""
+        if char in {"r", "R"} and points:
+            points.pop()
+
+
+def bounding_roi(points: List[Point]) -> AnnotationRoi:
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    min_x = min(xs)
+    min_y = min(ys)
+    max_x = max(xs)
+    max_y = max(ys)
+    return AnnotationRoi(x=min_x, y=min_y, width=max_x - min_x, height=max_y - min_y)
+
+
 def validate_annotation_roi(roi: AnnotationRoi, frame) -> AnnotationRoi:
     height, width = frame.shape[:2]
     if roi.x < 0 or roi.y < 0:
@@ -329,6 +389,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--display-max-size", default=1280, type=int, help="Resize preview so its longest side fits this size; saved coordinates remain in source resolution.")
     parser.add_argument("--annotation-roi", type=parse_annotation_roi, help="Rectangular drawing ROI as x,y,width,height in source-frame coordinates.")
     parser.add_argument("--select-roi", action="store_true", help="Select a rectangular drawing ROI interactively before drawing lanes.")
+    parser.add_argument("--select-roi-polygon", action="store_true", help="Select a free-form polygon ROI interactively; lanes are drawn on its bounding crop and roi_polygon is saved.")
     return parser.parse_args()
 
 
@@ -336,10 +397,15 @@ def main() -> int:
     args = parse_args()
     frame = read_frame(args.video, args.frame_index)
     annotation_roi = args.annotation_roi
+    roi_polygon = None
+    roi_modes = [bool(annotation_roi), args.select_roi, args.select_roi_polygon]
+    if sum(1 for enabled in roi_modes if enabled) > 1:
+        raise ValueError("Use only one ROI mode: --annotation-roi, --select-roi, or --select-roi-polygon.")
     if args.select_roi:
-        if annotation_roi:
-            raise ValueError("Use either --annotation-roi or --select-roi, not both.")
         annotation_roi = select_annotation_roi(frame, args.display_max_size)
+    if args.select_roi_polygon:
+        roi_polygon = select_roi_polygon(frame, args.display_max_size)
+        annotation_roi = bounding_roi(roi_polygon)
     if annotation_roi:
         annotation_roi = validate_annotation_roi(annotation_roi, frame)
         print(
@@ -347,7 +413,9 @@ def main() -> int:
             f"x={annotation_roi.x:.0f}, y={annotation_roi.y:.0f}, "
             f"width={annotation_roi.width:.0f}, height={annotation_roi.height:.0f}"
         )
-    session = ConfigSession(frame, args.output, args.camera_id, args.display_max_size, annotation_roi)
+    if roi_polygon:
+        print(f"Using polygon ROI with {len(roi_polygon)} points.")
+    session = ConfigSession(frame, args.output, args.camera_id, args.display_max_size, annotation_roi, roi_polygon)
     window = "TrafficFlow Configurator"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(window, session.on_mouse)

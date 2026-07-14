@@ -11,9 +11,13 @@ The MVP target is a local end-to-end system: upload video, draw lane with rectan
 - ROI annotation contract, coordinate helper, tests, and OpenCV config generator integration exist.
 - OpenCV config generator now supports rectangular annotation ROI for cropped drawing while preserving source-frame lane coordinates.
 - Backend, worker, queue, database, and frontend integration are implemented and E2E verified.
-- Package collision between root `trafficflow/` (backend) and `Traffic-Flow_Frontend/trafficflow/` (AI core) needs resolution.
-- Worker currently calls Modal GPU via HTTP API instead of using `TrafficFlowEngine` directly — refactor planned.
-- See [[Backend Refactor Plan]] for full refactor proposal.
+- **Package collision resolved**: `backend/` (FastAPI) vs `ai-core/` (AI library). Local GPU inference via `LocalInferenceClient` (no Modal).
+- **Docker optimized**: image 8GB→4.3GB, Celery `--concurrency=1`, worker-to-API via `http://api:8000`.
+- **Video pipeline complete**: 1080p normalize, ROI crop + letterbox 640×640, coordinate remap.
+- **COCO 4-class canonical**: car(2), motorcycle(3), bus(5), truck(7). OpenCV 4.10.x (not 5.0.0).
+- **Benchmark system**: `run_benchmark.py` CLI, 8 presets, stage profiler, ground truth comparison.
+- **UA-DETRAC integrated**: parser, converter, 3 sequences benchmarked. Key result: `optimized-a-yolov8n-fp16-640` = 6% count error, 24 FPS, 1.8× on RTX 5070 Ti.
+- **Next 2026-07-11**: tune lane config per DETRAC video, add model comparison (n vs s), final portfolio report.
 
 ## Ownership
 
@@ -132,3 +136,11 @@ Goal: harden the demo and deploy only if local is stable.
 - [[ROI Annotation]]
 - [[Decision Log]]
 - [[Deploy AI Traffic Work Plan Source]]
+
+## Video Upload / Normalization Policy
+
+- Upload routes normalize videos to a max 1080p / 30fps H.264 working copy before preview and worker processing.
+- `STORE_ORIGINAL_VIDEO=false` is the default: R2 stores only the normalized working video at `uploads/{video_id}.mp4` and both `video_url` / `working_video_url` point to that asset.
+- Set `STORE_ORIGINAL_VIDEO=true` only when archive/debug requires the original upload; then R2 stores `uploads/{video_id}.mp4` plus `uploads/{video_id}_1080p.mp4`.
+- The frontend compatibility endpoint `POST /videos` uses the same normalization/upload service as the main upload endpoint, so it no longer bypasses 1080p normalization.
+

@@ -1,11 +1,15 @@
 import math
 import logging
 from typing import List, Dict, Tuple, Set
-from collections import defaultdict
+from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
 
-COS_THRESHOLD = 0.3
+COS_THRESHOLD = 0.35
+LANE_LOCK_FRAMES = 3
+MIN_TRACK_AGE_FRAMES = 4
+DIRECTION_WINDOW_FRAMES = 6
+SMOOTHING_ALPHA = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +32,11 @@ def point_in_polygon(px: float, py: float, polygon: List[List[float]]) -> bool:
 def bbox_center(bbox_xyxy: List[float]) -> Tuple[float, float]:
     x1, y1, x2, y2 = bbox_xyxy
     return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def bbox_bottom_center(bbox_xyxy: List[float]) -> Tuple[float, float]:
+    x1, _y1, x2, y2 = bbox_xyxy
+    return ((x1 + x2) * 0.5, y2)
 
 
 def ccw(A: Tuple[float, float], B: Tuple[float, float], C: Tuple[float, float]) -> bool:
@@ -84,6 +93,9 @@ class DirectionFilter:
             return (dot / (v_mag * d_mag)) >= COS_THRESHOLD
         return True
 
+    def is_movement_aligned(self, start: Tuple[float, float], end: Tuple[float, float]) -> bool:
+        return self.is_aligned((end[0] - start[0], end[1] - start[1]))
+
 
 # ---------------------------------------------------------------------------
 # Line crossing detector
@@ -102,14 +114,14 @@ class LineCrossingDetector:
     def check_crossing(self, track_id: int,
                        last_center: Tuple[float, float],
                        center: Tuple[float, float],
-                       velocity: Tuple[float, float]) -> bool:
+                       direction_start: Tuple[float, float]) -> bool:
         if track_id in self._crossed_ids:
             return False
         if last_center == center:
             return False
         if not segments_intersect(last_center, center, self.line_start, self.line_end):
             return False
-        if not self.dir_filter.is_aligned(velocity):
+        if not self.dir_filter.is_movement_aligned(direction_start, center):
             return False
         self._crossed_ids.add(track_id)
         return True
@@ -138,8 +150,16 @@ class CountingState:
         self.lanes = lanes
         self.detectors: Dict[str, LineCrossingDetector] = {}
         self.counters: Dict[str, Dict[str, Set[int]]] = {}
+        self.global_counted_ids: Set[int] = set()
+        self.track_counted_lanes: Dict[int, Set[str]] = defaultdict(set)
         self._last_center: Dict[int, Tuple[float, float]] = {}
         self._assigned_lane: Dict[int, str] = {}
+        self._lane_candidate: Dict[int, str] = {}
+        self._lane_candidate_frames: Dict[int, int] = defaultdict(int)
+        self._track_age: Dict[int, int] = defaultdict(int)
+        self._anchor_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=DIRECTION_WINDOW_FRAMES))
+        self._smoothed_anchor: Dict[int, Tuple[float, float]] = {}
+        self._last_count_events: deque = deque(maxlen=30)
 
         for lane in lanes:
             lid = lane["lane_id"]
@@ -150,9 +170,6 @@ class CountingState:
             self.counters[lid] = defaultdict(set)
 
     def process_detections(self, detections: List[dict]):
-        import cv2
-        import numpy as np
-
         for det in detections:
             tid = det.get("track_id")
             if tid is None:
@@ -162,39 +179,57 @@ class CountingState:
             bbox = det.get("bbox_xyxy", [])
             if len(bbox) != 4:
                 continue
+            try:
+                x1, y1, x2, y2 = [float(v) for v in bbox]
+            except (TypeError, ValueError):
+                continue
+            if x2 <= x1 or y2 <= y1:
+                continue
 
             cls_name = det.get("class_name", "unknown")
-            velocity = det.get("kalman_velocity", (0, 0))
             lost = det.get("lost_frames", 0)
+            is_lost = bool(det.get("is_lost", False)) or int(lost or 0) > 0
+            if is_lost:
+                continue
 
-            center = bbox_center(bbox)
-
-            # --- Find best lane ---
-            best = None
-            x1, y1, x2, y2 = map(int, bbox)
-            if x2 > x1 and y2 > y1:
-                max_area = 0.0
-                for lane in self.lanes:
-                    poly = lane.get("valid_zone", [])
-                    if not poly:
-                        continue
-                    shifted = [[int(px) - x1, int(py) - y1] for px, py in poly]
-                    mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
-                    cv2.fillPoly(mask, [np.array(shifted, np.int32)], 1)
-                    area = float(np.sum(mask))
-                    if area > max_area:
-                        max_area = area
-                        best = lane["lane_id"]
-
-            if best is not None:
-                self._assigned_lane[tid] = best
+            center = bbox_bottom_center(bbox)
+            previous_smooth = self._smoothed_anchor.get(tid)
+            if previous_smooth is None:
+                smooth_center = center
             else:
-                best = self._assigned_lane.get(tid)
+                smooth_center = (
+                    previous_smooth[0] * (1.0 - SMOOTHING_ALPHA) + center[0] * SMOOTHING_ALPHA,
+                    previous_smooth[1] * (1.0 - SMOOTHING_ALPHA) + center[1] * SMOOTHING_ALPHA,
+                )
+            self._smoothed_anchor[tid] = smooth_center
+            self._track_age[tid] += 1
+            self._anchor_history[tid].append(smooth_center)
+
+            # --- Find/lock lane by smoothed bottom-center anchor ---
+            observed_lane = None
+            for lane in self.lanes:
+                poly = lane.get("valid_zone", [])
+                if poly and point_in_polygon(smooth_center[0], smooth_center[1], poly):
+                    observed_lane = lane["lane_id"]
+                    break
+
+            if observed_lane is not None:
+                if self._lane_candidate.get(tid) == observed_lane:
+                    self._lane_candidate_frames[tid] += 1
+                else:
+                    self._lane_candidate[tid] = observed_lane
+                    self._lane_candidate_frames[tid] = 1
+                if self._lane_candidate_frames[tid] >= LANE_LOCK_FRAMES:
+                    self._assigned_lane[tid] = observed_lane
+
+            best = self._assigned_lane.get(tid)
 
             last_center = self._last_center.get(tid)
-            self._last_center[tid] = center
+            self._last_center[tid] = smooth_center
 
             if last_center is None or best is None:
+                continue
+            if self._track_age[tid] < MIN_TRACK_AGE_FRAMES:
                 continue
 
             # --- Check class filter ---
@@ -207,8 +242,18 @@ class CountingState:
 
             # --- Count crossing ---
             detector = self.detectors[best]
-            if detector.check_crossing(tid, last_center, center, velocity):
+            history = self._anchor_history.get(tid)
+            direction_start = history[0] if history else last_center
+            if detector.check_crossing(tid, last_center, smooth_center, direction_start):
                 self.counters[best][cls_name].add(tid)
+                self.global_counted_ids.add(tid)
+                self.track_counted_lanes[tid].add(best)
+                self._last_count_events.append({
+                    "track_id": tid,
+                    "lane_id": best,
+                    "class_name": cls_name,
+                    "anchor": [round(smooth_center[0], 2), round(smooth_center[1], 2)],
+                })
                 logger.debug(f"Counted: track_id={tid}, class={cls_name}, lane={best}"
                              f"{' (lost+predicted)' if lost else ''}")
 
@@ -236,3 +281,51 @@ class CountingState:
             for ids in type_map.values():
                 total += len(ids)
         return total
+
+
+# Backward-compatible metric helpers attached to CountingState after class definition.
+def _counting_get_global_unique_count(self) -> int:
+    return len(self.global_counted_ids)
+
+
+def _counting_get_multi_lane_tracks(self) -> List[dict]:
+    return [
+        {"track_id": tid, "lanes": sorted(lanes)}
+        for tid, lanes in sorted(self.track_counted_lanes.items())
+        if len(lanes) > 1
+    ]
+
+
+def _counting_get_diagnostics(self) -> dict:
+    lane_volume_total = self.get_total_count()
+    global_unique_count = self.get_global_unique_count()
+    multi_lane_tracks = self.get_multi_lane_tracks()
+    return {
+        "lane_volume_total": lane_volume_total,
+        "global_unique_count": global_unique_count,
+        "multi_lane_track_count": len(multi_lane_tracks),
+        "multi_lane_tracks": multi_lane_tracks,
+        "double_count_delta": lane_volume_total - global_unique_count,
+    }
+
+
+def _counting_get_debug_snapshot(self) -> dict:
+    tracks = {}
+    for tid, anchor in self._smoothed_anchor.items():
+        history = self._anchor_history.get(tid, [])
+        tracks[str(tid)] = {
+            "anchor": [round(anchor[0], 2), round(anchor[1], 2)],
+            "history": [[round(p[0], 2), round(p[1], 2)] for p in list(history)],
+            "lane_candidate": self._lane_candidate.get(tid),
+            "lane_candidate_frames": self._lane_candidate_frames.get(tid, 0),
+            "lane_locked": self._assigned_lane.get(tid),
+            "track_age": self._track_age.get(tid, 0),
+            "counted_lanes": sorted(self.track_counted_lanes.get(tid, set())),
+        }
+    return {"tracks": tracks, "events": list(self._last_count_events)}
+
+
+CountingState.get_global_unique_count = _counting_get_global_unique_count
+CountingState.get_multi_lane_tracks = _counting_get_multi_lane_tracks
+CountingState.get_diagnostics = _counting_get_diagnostics
+CountingState.get_debug_snapshot = _counting_get_debug_snapshot
