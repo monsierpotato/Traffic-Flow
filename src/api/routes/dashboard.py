@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from lib.database import get_database
+from shared.database import get_database
 from api.schemas.dashboard import DashboardStatsResponse, RecentTask
 
 router = APIRouter()

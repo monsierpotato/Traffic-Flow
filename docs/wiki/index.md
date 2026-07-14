@@ -3,10 +3,13 @@
 ## Architecture
 - [[Production Architecture]] - Planned system boundaries for API, worker, queue, storage, observability, and the reusable AI runtime.
 - [[Geometry Config Scaling]] - Phased plan for removing the manual per-camera geometry bottleneck (industrialize manual config, then automate inference).
+- [[Local DB Fallback]] - Development fallback when MongoDB Atlas TLS/connectivity fails during local E2E.
 
 ## AI Workflow
 - [[Runtime Engine]] - The reusable counting workflow shared by CLI now and future API/worker code.
 - [[AI Core Integration Guide]] - How the Backend worker installs and calls the AI core as a library (install, public API, worker example).
+- [[GPU Docker + Live Streaming Optimization]] - Local GPU Docker queue, smooth stage progress, and live camera anti-lag workflow.
+- [[Live Source Annotation Workflow]] - Resolve YouTube/HLS/RTSP/MJPEG sources, capture preview, annotate geometry, then start live counting.
 - [[ROI Annotation]] - Rectangular crop workflow for more accurate lane drawing while keeping source-frame coordinates.
 
 ## Contracts

@@ -1,363 +1,292 @@
-# 🚦 Hướng dẫn chạy & sử dụng TrafficFlow
+# TrafficFlow — Hướng dẫn sử dụng & Triển khai
 
-## 📋 Yêu cầu hệ thống
-
-| Phần mềm | Phiên bản tối thiểu | Mục đích |
-|----------|---------------------|----------|
-| Python | 3.10+ | Backend API |
-| Redis | 6.0+ | Celery message broker |
-| MongoDB | 5.0+ hoặc Atlas cloud | Cơ sở dữ liệu |
-| Node.js | 18+ (nếu build frontend) | Build React frontend |
-| FFmpeg | Bất kỳ (tùy chọn) | Xử lý video nâng cao |
-
-> **Lưu ý:** Project đã được cấu hình sẵn MongoDB Atlas và Redis cloud trong file `.env`, nên bạn **không cần cài MongoDB/Redis local**.
+Hệ thống phân tích giao thông bằng video: phát hiện, tracking và đếm xe theo lane với YOLOv8 + ByteTrack, chạy hoàn toàn local qua Docker với GPU acceleration.
 
 ---
 
-## 🔧 Cài đặt
+## Kiến trúc hệ thống
 
-### Bước 1: Tạo Virtual Environment
-
-```bash
-cd d:\Backend_traffic_flow
-python -m venv .venv
+```
+┌─────────────────────────────────────────────────────┐
+│  Docker Compose (local)                              │
+│                                                      │
+│  ┌──────────┐   ┌──────────┐   ┌──────────────────┐ │
+│  │  Redis   │   │  API     │   │  Worker (Celery)  │ │
+│  │  :6379   │◄─►│  :8000   │◄─►│  YOLO GPU (5070Ti)│ │
+│  │ (broker) │   │ FastAPI  │   │  prefork x2       │ │
+│  └──────────┘   │ React FE │   └──────────────────┘ │
+│                 └──────────┘                         │
+│                      │                               │
+│                 ┌────┴────┐                          │
+│                 │ MongoDB │  (Atlas cloud)            │
+│                 │  Atlas  │                          │
+│                 └─────────┘                          │
+│                 ┌────┴────┐                          │
+│                 │   R2    │  (Cloudflare storage)    │
+│                 └─────────┘                          │
+└─────────────────────────────────────────────────────┘
 ```
 
-### Bước 2: Kích hoạt Virtual Environment
-
-```bash
-# Windows CMD
-.venv\Scripts\activate
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
+**Flow xử lý 1 video:**
+```
+Upload → Lưu R2 → Extract preview → User vẽ ROI+Lanes
+  → Save config MongoDB → Submit task
+    → Celery gửi worker → Worker download video
+      → Stabilize → Crop ROI (4K→640px) → YOLO GPU detect
+        → ByteTrack → Counting gate → Render overlay
+          → Upload kết quả R2 → Callback API → Frontend poll
 ```
 
-### Bước 3: Cài đặt dependencies
+---
+
+## Yêu cầu hệ thống
+
+| Thành phần | Tối thiểu | Khuyến nghị |
+|-----------|----------|-------------|
+| Docker + Docker Compose | ✅ Bắt buộc | Latest |
+| GPU NVIDIA + CUDA 12.4+ | Tùy chọn | RTX 3060+ (có sẵn RTX 5070 Ti) |
+| RAM | 8GB | 16GB+ |
+| Disk | 30GB | 50GB (cho models + Docker) |
+
+> **Không cần cài Python, MongoDB, Redis** — tất cả chạy trong Docker container. MongoDB Atlas & Redis cloud đã cấu hình sẵn trong `.env`.
+
+---
+
+## Triển khai (Docker)
+
+### Build & Start
 
 ```bash
-pip install -r requirements.txt
+cd C:\Users\ADMIN\OneDrive\Documents\_Project\TrafficFlow
+
+# Build image (lần đầu ~10 phút)
+docker compose build
+
+# Start tất cả services
+docker compose up -d
 ```
 
-### Bước 4: Kiểm tra file `.env`
+3 container sẽ chạy:
+| Container | Vai trò | Port |
+|-----------|---------|------|
+| `trafficflow-redis-1` | Message broker cho Celery | 6379 (internal) |
+| `trafficflow-api-1` | FastAPI + React frontend | **8000** |
+| `trafficflow-worker-1` | Celery worker — YOLO GPU inference | – |
 
-Đảm bảo file `.env` ở thư mục gốc `d:\Backend_traffic_flow\.env` chứa đầy đủ các biến:
+### Kiểm tra GPU hoạt động
+
+```bash
+docker compose exec worker python -c "import torch; print(torch.cuda.get_device_name(0))"
+# → NVIDIA GeForce RTX 5070 Ti
+```
+
+### Dừng
+
+```bash
+docker compose down
+```
+
+---
+
+## Truy cập
+
+Sau khi start, mở trình duyệt:
+
+| URL | Mô tả |
+|-----|-------|
+| http://localhost:8000 | **Frontend React** (chính) |
+| http://localhost:8000/docs | Swagger API docs |
+| http://localhost:8000/api/v1/dashboard/stats | Dashboard stats (JSON) |
+
+---
+
+## Sử dụng (Frontend)
+
+### 1. Upload video
+- Kéo thả hoặc chọn file `.mp4`
+- Hỗ trợ chunked upload cho video lớn (tự động resume nếu mất kết nối)
+- Hệ thống trích xuất frame preview tự động
+- Max file size: 2048MB
+
+### 2. Vẽ ROI (Region of Interest)
+- Click để thêm bao nhiêu điểm ROI tùy ý quanh vùng đường cần giám sát
+- Kéo từng điểm neo để tinh chỉnh polygon; có thể xoá điểm đang chọn hoặc reset
+- Hệ thống crop theo bounding rectangle của polygon, sau đó mask phần ngoài polygon trước khi đưa vào AI
+- Input cho AI là vùng ROI đã crop/mask/resize, không phải toàn bộ frame 4K
+
+### 3. Vẽ Lanes
+- Mỗi lane gồm:
+  - **Zone** (4 điểm): vùng phát hiện xe
+  - **Counting Line** (2 điểm): đường đếm xe cắt ngang
+  - **Direction** (vector): hướng xe đi
+  - **Class allowed**: car, bus, truck, motorcycle
+
+### 4. Submit & Theo dõi
+- Nhấn Submit → task vào Celery queue
+- Progress bar cập nhật realtime (poll mỗi 2s)
+- Kết quả: video có overlay + bảng thống kê từng lane
+
+---
+
+## Inference Engine
+
+### Local GPU (hiện tại)
+
+- Model: **YOLOv8n** (6.3MB) hoặc **YOLOv8s** (22MB)
+- Engine: PyTorch 2.x + CUDA 12.4
+- Device: `cuda:0` — NVIDIA RTX 5070 Ti (16GB VRAM)
+- Pipeline: frame → ROI crop → resize 640px → YOLO detect → ByteTrack → Counting gate
+- Tốc độ: ~0.02-0.1s/frame (GPU), ~1-2s/frame (CPU fallback)
+- Frame skip: 2 (xử lý mỗi frame thứ 3, configurable trong `.env`)
+
+### Local CPU (fallback)
+
+Khi GPU không khả dụng, tự động fallback về CPU. Đặt `AI_LOCAL=true` trong `.env`.
+
+---
+
+## API Endpoints
+
+### Frontend Compat Routes
+
+| Method | Path | Mô tả |
+|--------|------|-------|
+| POST | `/videos` | Upload video |
+| GET | `/videos/{id}/preview` | Lấy preview frame |
+| POST | `/tasks` | Submit lane config + trigger process |
+| GET | `/tasks/{id}` | Poll task status |
+| GET | `/tasks/{id}/result` | Lấy kết quả |
+
+### API v1
+
+| Method | Path | Mô tả |
+|--------|------|-------|
+| POST | `/api/v1/upload/video` | Upload video (single) |
+| POST | `/api/v1/upload/video/chunk` | Upload chunked |
+| POST | `/api/v1/upload/video/chunk/{id}/complete` | Ghép chunks |
+| POST | `/api/v1/lanes/config` | Lưu lane config |
+| GET | `/api/v1/lanes/config/{id}` | Lấy lane config |
+| POST | `/api/v1/tasks/process` | Trigger process |
+| GET | `/api/v1/tasks/status/{id}` | Task status |
+| GET | `/api/v1/tasks/result/{id}` | Task result |
+| GET | `/api/v1/dashboard/stats` | Dashboard thống kê |
+
+---
+
+## Cấu hình (.env)
 
 ```env
 # MongoDB Atlas
 MONGODB_URI=mongodb+srv://...
 MONGODB_DB_NAME=trafficflow
 
-# Cloudflare R2 (để placeholder nếu chưa có → tự động dùng local storage)
-R2_ACCOUNT_ID=placeholder_account_id
-R2_ACCESS_KEY_ID=placeholder_access_key
-R2_SECRET_ACCESS_KEY=placeholder_secret_key
-R2_BUCKET_NAME=trafficflow
-R2_PUBLIC_URL=http://localhost:8000/static/previews
+# Cloudflare R2
+R2_ACCOUNT_ID=...
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_BUCKET_NAME=traffic-flow
+R2_PUBLIC_URL=https://...r2.dev
 
-# Redis (Celery broker)
-REDIS_URL=redis://...
+# Redis cloud
+REDIS_URL=redis://default:...@...redis.io:17295
 
-# Upload settings
-MAX_FILE_SIZE_MB=1024
+# Callback (worker gọi API trong Docker)
+CALLBACK_HOST=http://api:8000
+
+# Inference
+AI_LOCAL=true                    # Bắt buộc: dùng local YOLO
+AI_FRAME_SKIP=2                  # Process mỗi frame thứ 3
+AI_RESIZE_DIM=640                # Resize frame về 640px
+AI_ENABLE_STABILIZATION=true     # Chống rung camera
+
+# Upload
+MAX_FILE_SIZE_MB=2048
 RETENTION_DAYS=3
-```
 
-> Nếu `R2_ACCOUNT_ID` là `placeholder_account_id`, hệ thống sẽ tự động lưu file vào thư mục `storage/` local thay vì Cloudflare R2.
-
----
-
-## 🚀 Khởi chạy
-
-Bạn cần mở **2 terminal riêng biệt** — một cho API Server, một cho Celery Worker.
-
-### Terminal 1 — Chạy FastAPI Server
-
-```bash
-cd d:\Backend_traffic_flow
-.venv\Scripts\activate
-set PYTHONPATH=.
-python -m trafficflow.main
-```
-
-Hoặc dùng file bat có sẵn:
-
-```bash
-run_server.bat
-```
-
-Khi thấy dòng này nghĩa là server đã sẵn sàng:
-
-```
-INFO:     Uvicorn running on http://0.0.0.0:8000
-INFO:     Mounted static directory 'storage' at '/static'
-INFO:     Mounted frontend dist directory at '/'
-```
-
-### Terminal 2 — Chạy Celery Worker
-
-```bash
-cd d:\Backend_traffic_flow
-.venv\Scripts\activate
-celery -A trafficflow.core.celery_app worker --pool=solo -l info
-```
-
-Hoặc dùng file bat có sẵn:
-
-```bash
-run_worker.bat
-```
-
-Khi thấy dòng này nghĩa là worker đã sẵn sàng nhận task:
-
-```
-[2026-xx-xx xx:xx:xx] celery@YOUR_PC ready.
-```
-
-> ⚠️ **Trên Windows** phải dùng `--pool=solo` vì Celery prefork không hỗ trợ đầy đủ trên Windows.
-
----
-
-## 🌐 Truy cập giao diện
-
-Sau khi cả 2 terminal đều đã chạy, mở trình duyệt:
-
-| Giao diện | URL | Mô tả |
-|-----------|-----|-------|
-| **Frontend React** (chính) | [http://localhost:8000](http://localhost:8000) | Giao diện React đầy đủ |
-| **Test Dashboard** (HTML) | [http://localhost:8000/static/index.html](http://localhost:8000/static/index.html) | Dashboard test đơn giản |
-| **API Docs** (Swagger) | [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI để test API trực tiếp |
-| **API Docs** (ReDoc) | [http://localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc — dạng tài liệu API |
-
----
-
-## 📖 Hướng dẫn sử dụng (Frontend React)
-
-### Step 1: Upload Video
-
-1. Truy cập [http://localhost:8000](http://localhost:8000)
-2. Ở trang **"Video Source"**, click vào vùng **"Drag and drop video feed"** hoặc nhấn **"Browse Files"**
-3. Chọn file video (`.mp4` hoặc `.avi`)
-4. Đợi upload hoàn tất — hệ thống sẽ:
-   - Upload video lên server
-   - Trích xuất frame đầu tiên làm preview
-   - Tự động chuyển sang bước tiếp theo
-
-### Step 2: Vẽ ROI (Region of Interest)
-
-1. Trên canvas hiển thị frame preview, bạn sẽ thấy **4 điểm neo màu đỏ** tạo thành hình tứ giác
-2. **Kéo thả** 4 điểm để bao quanh vùng đường bạn muốn giám sát
-3. Mục đích: crop video chỉ giữ lại vùng đường, loại bỏ phần thừa (vỉa hè, cây cối...)
-4. Quan sát thông số **Crop X, Y, Width, Height** ở panel phải
-5. Nhấn **"Confirm ROI"** để xác nhận
-
-### Step 3: Vẽ Lane (Làn đường)
-
-1. Ở canvas crop, bạn cần vẽ **3 thành phần** cho mỗi lane:
-
-   | Thành phần | Cách vẽ | Ý nghĩa |
-   |-----------|---------|---------|
-   | **Zone** (vùng) | Click 4 điểm tạo tứ giác | Vùng phát hiện xe |
-   | **Line** (đường đếm) | Kéo chuột vẽ đoạn thẳng | Đường counting gate |
-   | **Arrow** (hướng) | Kéo chuột vẽ mũi tên | Hướng di chuyển của xe |
-
-2. Chọn tab **"Zone"** → Click 4 điểm trên canvas bao quanh 1 làn đường
-3. Chọn tab **"Line"** → Kéo chuột vẽ đường đếm cắt ngang làn
-4. Chọn tab **"Arrow"** → Kéo chuột vẽ hướng xe đi (vào/ra)
-5. Để thêm lane mới, nhấn nút **"+"** ở panel phải
-6. Đặt tên lane trong ô input (ví dụ: `lane_1`, `lane_2`)
-7. Có thể kéo thả các điểm để chỉnh sửa vị trí
-8. Điều chỉnh **Runtime parameters** nếu cần:
-   - **Movement threshold**: Ngưỡng pixel để phát hiện xe đang di chuyển
-   - **Cooldown frames**: Số frame chờ trước khi đếm lại cùng 1 xe
-   - **Cooldown distance**: Khoảng cách pixel tối thiểu giữa 2 lần đếm
-9. Nhấn **"Submit Task"** khi đã hoàn tất
-
-### Step 4: Xem kết quả Analytics
-
-1. Sau khi submit, hệ thống sẽ:
-   - Gửi cấu hình lane lên backend
-   - Crop video theo ROI
-   - Đẩy task vào hàng đợi Celery
-2. **Progress bar** sẽ tự động cập nhật: 0% → 25% → 60% → 90% → 100%
-3. Khi hoàn tất, bạn sẽ thấy:
-   - 🎬 **Video kết quả** (có đánh dấu xe)
-   - 📊 **Bảng thống kê** số lượng xe theo từng lane và loại xe (car, bus, truck, motorcycle)
-   - 📈 **Biểu đồ bar** trực quan
-4. Nhấn **"View JSON"** để xem raw data payload
-
----
-
-## 📖 Hướng dẫn sử dụng (Test Dashboard HTML)
-
-Truy cập [http://localhost:8000/static/index.html](http://localhost:8000/static/index.html)
-
-### Step 1: Upload Video
-- Click vào vùng upload hoặc kéo thả file video vào
-- Đợi upload hoàn tất → frame preview sẽ hiện ra
-
-### Step 2: Vẽ ROI & Lane
-- Nhấn **"🔴 Vẽ ROI"** → Click trên ảnh ít nhất 3 điểm để vẽ vùng quan sát
-- **Double-click** hoặc nhấn **"✅ Hoàn thành"** để kết thúc vẽ ROI
-- Nhấn **"➕ Thêm Lane"** → Click vẽ polygon ít nhất 3 điểm cho mỗi lane
-- **Double-click** để kết thúc vẽ lane
-- Kéo thả các điểm để điều chỉnh vị trí
-- Đặt tên lane và chọn hướng (Vào/Ra/Cả hai)
-- Nhấn **"💾 Lưu cấu hình & Tiếp tục"**
-
-### Step 3: Xử lý
-- Nhấn **"Trigger Process Queue"**
-- Theo dõi progress bar tự động cập nhật
-
-### Step 4: Xem kết quả
-- Khi hoàn tất, video kết quả và bảng thống kê sẽ tự động hiện ra
-- Dashboard bên phải hiển thị tổng quan tất cả tasks
-
----
-
-## 🔌 API Reference (Tóm tắt)
-
-Truy cập [http://localhost:8000/docs](http://localhost:8000/docs) để xem Swagger UI đầy đủ.
-
-### Upload video
-```bash
-curl -X POST http://localhost:8000/api/v1/upload/video \
-  -F "file=@sample.mp4"
-```
-
-### Cấu hình lane
-```bash
-curl -X POST http://localhost:8000/api/v1/lanes/config \
-  -H "Content-Type: application/json" \
-  -d '{
-    "video_id": "<VIDEO_ID>",
-    "lanes": [{
-      "lane_id": "lane-1",
-      "name": "Lane 1",
-      "points": [{"x": 0.1, "y": 0.3}, {"x": 0.5, "y": 0.3}, {"x": 0.5, "y": 0.8}, {"x": 0.1, "y": 0.8}],
-      "direction": "both"
-    }],
-    "roi": {
-      "points": [{"x": 0.05, "y": 0.2}, {"x": 0.95, "y": 0.2}, {"x": 0.95, "y": 0.9}, {"x": 0.05, "y": 0.9}]
-    }
-  }'
-```
-
-### Trigger xử lý
-```bash
-curl -X POST http://localhost:8000/api/v1/tasks/process \
-  -H "Content-Type: application/json" \
-  -d '{"video_id": "<VIDEO_ID>"}'
-```
-
-### Kiểm tra trạng thái
-```bash
-curl http://localhost:8000/api/v1/tasks/status/<TASK_ID>
-```
-
-### Lấy kết quả
-```bash
-curl http://localhost:8000/api/v1/tasks/result/<TASK_ID>
-```
-
-### Xem dashboard
-```bash
-curl http://localhost:8000/api/v1/dashboard/stats
+# Local tracker
+TRACK_MATCH_THRESHOLD=0.5
+TRACK_BUFFER=30
 ```
 
 ---
 
-## ❓ Xử lý lỗi thường gặp
-
-| Lỗi | Nguyên nhân | Cách fix |
-|-----|------------|----------|
-| `ModuleNotFoundError: No module named 'trafficflow'` | Thiếu PYTHONPATH | Chạy `set PYTHONPATH=.` trước khi start |
-| `Connection refused` khi upload | Server chưa chạy | Chạy `run_server.bat` trước |
-| Progress bar không chạy sau khi trigger | Worker chưa chạy | Chạy `run_worker.bat` ở terminal thứ 2 |
-| `Task is in status 'uploaded'` | Chưa configure lanes | Vẽ ROI + lanes trước khi trigger process |
-| Preview ảnh không hiển thị | Thiếu OpenCV | Chạy `pip install opencv-python-headless` |
-| `No module named 'magic'` | Thiếu python-magic | Chạy `pip install python-magic python-magic-bin` |
-| Redis connection refused | Redis chưa chạy / URL sai | Kiểm tra `REDIS_URL` trong `.env` |
-| MongoDB connection timeout | MongoDB URI sai / mạng | Kiểm tra `MONGODB_URI` trong `.env` |
-
----
-
-## 📂 Cấu trúc thư mục
+## Cấu trúc thư mục
 
 ```
-d:\Backend_traffic_flow\
+TrafficFlow/
+├── Dockerfile                    # Multi-stage: Node FE + Python CUDA
+├── docker-compose.yml            # 3 services: redis, api, worker
+├── .dockerignore
 ├── .env                          # Biến môi trường
-├── requirements.txt              # Python dependencies
-├── run_server.bat                # Script chạy FastAPI server
-├── run_worker.bat                # Script chạy Celery worker
-├── sample.mp4                    # Video mẫu để test
 │
-├── trafficflow/                  # Backend Python package
-│   ├── main.py                   # Entry point (uvicorn)
-│   ├── config.py                 # Settings từ .env
+├── src/
 │   ├── api/
-│   │   ├── app.py                # FastAPI app factory
-│   │   └── v1/
-│   │       ├── router.py         # API router tổng
-│   │       ├── upload.py         # POST /upload/video
-│   │       ├── lanes.py          # POST /lanes/config
-│   │       ├── tasks.py          # POST /tasks/process, GET /status, /result
-│   │       └── dashboard.py      # GET /dashboard/stats
-│   ├── core/
-│   │   ├── database.py           # MongoDB connection (Motor)
-│   │   ├── celery_app.py         # Celery config + mock worker
-│   │   └── r2_client.py          # Cloudflare R2 / Local storage
-│   ├── services/
-│   │   ├── video_service.py      # Extract frame, crop video (OpenCV)
-│   │   └── cleanup_service.py    # Auto-delete expired data
-│   ├── schemas/                  # Pydantic models
-│   └── middleware/
-│       └── file_validator.py     # Validate upload (size, type, MIME)
+│   │   ├── app.py                # FastAPI app factory + lifespan
+│   │   ├── main.py               # Entry point (uvicorn)
+│   │   ├── middleware/
+│   │   │   └── file_validator.py # Validate upload (size, type)
+│   │   ├── routes/
+│   │   │   ├── upload.py         # Upload + chunked upload
+│   │   │   ├── lanes.py          # Lane config CRUD
+│   │   │   ├── tasks.py          # Process, status, result
+│   │   │   ├── dashboard.py      # Stats
+│   │   │   └── frontend_compat.py# Routes cho React frontend
+│   │   ├── schemas/              # Pydantic models
+│   │   └── services/             # Video processing
+│   ├── shared/
+│   │   ├── config.py             # Settings từ .env
+│   │   ├── database.py           # MongoDB async (Motor)
+│   │   └── r2_client.py          # Cloudflare R2 storage
+│   ├── worker/
+│   │   ├── celery_app.py         # Celery task process_video
+│   │   ├── pipeline/
+│   │   │   ├── processor.py      # Stabilize → crop → resize
+│   │   │   ├── local_client.py   # YOLO GPU/CPU inference
+│   │   │   ├── tracker.py        # Kalman + IoU tracking
+│   │   │   └── renderer.py       # Overlay drawing
+│   │   └── services/
+│   │       └── counting_service.py
+│   └── tfengine/
+│       └── core_ai/
+│           └── detector.py       # YoloByteTrackDetector
 │
-├── storage/                      # Local file storage (R2 mock)
-│   ├── index.html                # Test Dashboard HTML
-│   ├── uploads/                  # Video files
-│   ├── previews/                 # Preview frames (JPG)
-│   └── results/                  # Processed results
+├── models/
+│   ├── yolov8n.pt                # 6.3MB (nano)
+│   └── yolov8s.pt                # 22MB (small)
 │
-└── Traffic-Flow_Frontend/        # React frontend (Vite)
-    └── frontend/
-        ├── src/App.jsx           # Main React component
-        ├── dist/                 # Built production files
-        └── package.json
+├── frontend/                     # React (Vite)
+│   └── dist/                     # Production build
+│
+├── configs/                      # Config mẫu
+│   └── danang/
+│       └── cau_rong_manual.json  # 2 lanes, 4K
+│
+├── data/raw/danang/              # Video nguồn
+├── storage/                      # Local previews/chunks
+├── tests/                        # 137 unit tests
+└── docs/                         # Tài liệu
 ```
 
 ---
 
-## 🔄 Quy trình hoạt động tổng quan
+## Xử lý lỗi thường gặp
 
-```
-[User Upload Video]
-        │
-        ▼
-[Backend: Lưu video + Trích xuất preview frame]
-        │
-        ▼
-[User: Vẽ ROI + Lanes trên preview]
-        │
-        ▼
-[Backend: Lưu lane config vào MongoDB]
-        │
-        ▼
-[User: Nhấn "Process"]
-        │
-        ▼
-[Backend: Crop video theo ROI → Gửi Celery task]
-        │
-        ▼
-[Celery Worker: Xử lý video → Callback progress về Backend]
-        │
-        ▼
-[Frontend: Poll status mỗi 1.5-2s → Hiển thị progress]
-        │
-        ▼
-[Worker hoàn tất → Status = "completed"]
-        │
-        ▼
-[Frontend: Fetch kết quả → Hiển thị video + thống kê]
-```
+| Lỗi | Nguyên nhân | Fix |
+|-----|------------|-----|
+| Docker build fail | Thiếu Docker Desktop | Chạy Docker Desktop trước |
+| `CUDA not available` | Chưa cài nvidia-container-toolkit | `winget install Nvidia.ContainerToolkit` |
+| Upload timeout | Video quá lớn (>2GB) | Dùng chunked upload hoặc giảm `MAX_FILE_SIZE_MB` |
+| Task stuck "pending" | Worker không kết nối Redis | Kiểm tra `docker compose ps` |
+| Progress không cập nhật | Callback URL sai | Đảm bảo `CALLBACK_HOST=http://api:8000` |
+| Preview không hiển thị | Thiếu `storage/previews/` | Tự động tạo khi start |
+
+---
+
+## Benchmark
+
+| Cấu hình | 10-frame test | Video 4K (~3300 frames, ROI crop) |
+|----------|--------------|-----------------------------------|
+| CPU (YOLOv8n) | ~3s | ~25-50 phút |
+| **GPU RTX 5070 Ti** (YOLOv8n) | **~0.5s** | **~2-5 phút** |
+| GPU RTX 5070 Ti (YOLOv8s) | ~1s | ~5-8 phút |
+

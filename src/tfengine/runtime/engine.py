@@ -21,6 +21,9 @@ class VideoCountingRequest:
     config_path: Path
     model_path: str = "models/yolov8n.pt"
     device: Optional[str] = None
+    imgsz: int = 640
+    half: bool = False
+    class_ids: Optional[list] = None
     confidence: float = 0.25
     max_frames: Optional[int] = None
     output_video_path: Optional[Path] = None
@@ -78,6 +81,9 @@ class TrafficFlowEngine:
             request.model_path,
             confidence=request.confidence,
             device=request.device,
+            imgsz=request.imgsz,
+            half=request.half,
+            class_ids=request.class_ids,
         )
 
         cap = cv2.VideoCapture(str(request.video_path))

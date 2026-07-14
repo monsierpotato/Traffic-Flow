@@ -5,3 +5,4 @@ set OMP_NUM_THREADS=1
 set PYTHONPATH=.
 .venv\Scripts\python.exe -m backend.main
 pause
+
