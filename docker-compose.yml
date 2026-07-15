@@ -1,0 +1,116 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  api:
+    build: .
+    image: trafficflow:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CALLBACK_HOST=http://api:8000
+      - AI_LOCAL=true
+      - AI_ENABLE_STABILIZATION=false
+      - AI_MODEL_PATH=models/yolo11m.pt
+      - AI_CLASS_IDS=2,3,5,7
+      - AI_CLASS_NAME_MAP=
+      - AI_IMGSZ=640
+      - AI_CONFIDENCE=0.4
+      - AI_IOU=0.45
+      - AI_MAX_DET=100
+      - AI_AGNOSTIC_NMS=false
+      - AI_FRAME_SKIP=1
+      - TRACK_BUFFER=8
+      - TRACK_MATCH_THRESHOLD=0.3
+      - RENDER_SHOW_LOST=false
+      - RENDER_SHOW_OUT_OF_ZONE=false
+      - TRACK_FILTER_ZONE_PADDING_PX=12
+      - ROI_MODE=crop_rect
+      - ROI_CROP_PADDING=0.10
+      - OUTPUT_FRAME_MODE=roi
+      - CELERY_QUEUE_NAME=trafficflow_gpu_queue
+      - LIVE_READER_BACKEND=auto
+      - LIVE_FFMPEG_OUTPUT_FPS=15
+      - LIVE_FFMPEG_REALTIME_PACING=true
+      - LIVE_FFMPEG_RW_TIMEOUT_US=10000000
+      - LIVE_FRAME_QUEUE_SIZE=1
+      - LIVE_MAX_FRAME_AGE_SECONDS=0.25
+      - LIVE_TRACK_MIN_HITS=3
+      - LIVE_TRACK_MAX_LOST_SECONDS=0.7
+      - LIVE_TRACK_RESET_GAP_SECONDS=1.0
+      - LIVE_RECONNECT_ATTEMPTS=3
+      - LIVE_RECONNECT_DELAY_SECONDS=1.0
+      - RENDER_DEBUG=false
+      - YTDLP_COOKIES_FILE=/run/secrets/youtube_cookies.txt
+      - YTDLP_JS_RUNTIME=node
+      - YTDLP_REMOTE_COMPONENTS=ejs:github
+    volumes:
+      - C:/Users/ADMIN/Downloads/cookies.txt:/run/secrets/youtube_cookies.txt:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: trafficflow:latest
+    command: celery -A worker.celery_app worker --pool=prefork --concurrency=1 -Q trafficflow_gpu_queue --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CALLBACK_HOST=http://api:8000
+      - AI_LOCAL=true
+      - AI_ENABLE_STABILIZATION=false
+      - AI_MODEL_PATH=models/yolo11m.pt
+      - AI_CLASS_IDS=2,3,5,7
+      - AI_CLASS_NAME_MAP=
+      - AI_IMGSZ=640
+      - AI_CONFIDENCE=0.4
+      - AI_IOU=0.45
+      - AI_MAX_DET=100
+      - AI_AGNOSTIC_NMS=false
+      - AI_FRAME_SKIP=1
+      - TRACK_BUFFER=8
+      - TRACK_MATCH_THRESHOLD=0.3
+      - RENDER_SHOW_LOST=false
+      - RENDER_SHOW_OUT_OF_ZONE=false
+      - TRACK_FILTER_ZONE_PADDING_PX=12
+      - ROI_MODE=crop_rect
+      - ROI_CROP_PADDING=0.10
+      - OUTPUT_FRAME_MODE=roi
+      - CELERY_QUEUE_NAME=trafficflow_gpu_queue
+      - LIVE_READER_BACKEND=auto
+      - LIVE_FFMPEG_OUTPUT_FPS=15
+      - LIVE_FFMPEG_REALTIME_PACING=true
+      - LIVE_FFMPEG_RW_TIMEOUT_US=10000000
+    depends_on:
+      redis:
+        condition: service_healthy
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+
