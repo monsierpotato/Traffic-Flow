@@ -27,7 +27,7 @@ LIVE_SOURCES: Dict[str, dict] = {}
 class LiveSessionCreate(BaseModel):
     source_url: str = Field(..., min_length=3)
     lane_config: Optional[Dict[str, Any]] = None
-    frame_skip: int = Field(default=2, ge=1, le=10)
+    frame_skip: int = Field(default=1, ge=1, le=10)
 
 
 class LiveSourceResolve(BaseModel):
@@ -147,6 +147,14 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
         errors.append("resolution.width and resolution.height are required")
     if not (config.get("processing_roi") or config.get("annotation_roi")):
         errors.append("processing_roi or annotation_roi is required")
+    geometry_space = config.get("geometry_space")
+    if geometry_space is not None and geometry_space not in {"source_frame", "crop_local"}:
+        errors.append("geometry_space must be source_frame or crop_local")
+    # Existing saved configs with a padded crop already store lane points in
+    # crop-local space.  Preserve that convention until clients explicitly
+    # include geometry_space.
+    if geometry_space is None:
+        geometry_space = "crop_local" if (config.get("crop_rect_padded") or config.get("processing_width")) else "source_frame"
     roi_polygon = config.get("roi_polygon") or []
     if len(roi_polygon) < 3:
         errors.append("roi_polygon must contain at least 3 points")
@@ -161,11 +169,24 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
             errors.append(f"{prefix}: counting_line must contain exactly 2 points")
         if len(lane.get("direction") or []) != 2:
             errors.append(f"{prefix}: direction must contain exactly 2 points")
-    if width > 0 and height > 0:
-        for label, points in [("roi_polygon", roi_polygon)]:
+    if geometry_space == "source_frame":
+        coordinate_width, coordinate_height = width, height
+    else:
+        crop = config.get("crop_rect_padded") or config.get("processing_roi") or config.get("annotation_roi") or {}
+        coordinate_width = int(config.get("processing_width") or crop.get("width") or 0)
+        coordinate_height = int(config.get("processing_height") or crop.get("height") or 0)
+    if coordinate_width > 0 and coordinate_height > 0:
+        all_geometry = [("roi_polygon", roi_polygon)]
+        for index, lane in enumerate(lanes, start=1):
+            all_geometry.extend([
+                (f"lane {index}.valid_zone", lane.get("valid_zone") or []),
+                (f"lane {index}.counting_line", lane.get("counting_line") or []),
+                (f"lane {index}.direction", lane.get("direction") or []),
+            ])
+        for label, points in all_geometry:
             for point in points:
-                if len(point) >= 2 and not (0 <= point[0] <= width and 0 <= point[1] <= height):
-                    errors.append(f"{label}: point {point} is outside source resolution")
+                if len(point) >= 2 and not (0 <= point[0] < coordinate_width and 0 <= point[1] < coordinate_height):
+                    errors.append(f"{label}: point {point} is outside {geometry_space} bounds")
                     break
     return not errors, errors
 

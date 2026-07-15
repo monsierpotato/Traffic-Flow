@@ -188,19 +188,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        # Normalize all post-crop runtime geometry into processing-frame coordinates.
-        lanes_processing = lanes_source
-        if use_detection_crop:
-            transform_init = FrameTransform(
-                full_w=width, full_h=height,
-                crop_w=out_w, crop_h=out_h,
-                ai_w=settings.ROI_INPUT_SIZE, ai_h=settings.ROI_INPUT_SIZE,
-                offset_x=crop_rect[0], offset_y=crop_rect[1],
-            )
-            lanes_processing = transform_init.shift_lanes_to_crop(lanes_source)
-        _warn_points_outside_processing_bounds(lanes_processing, out_w, out_h, "lanes_processing")
-        counter = CountingState(lanes_processing)
-        renderer = FrameRenderer(lanes_processing)
+        counter = CountingState(lanes)
+        renderer = FrameRenderer(lanes, settings_obj=settings)
 
         # Stabilisation reference frame
         if settings.AI_ENABLE_STABILIZATION:

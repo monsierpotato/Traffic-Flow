@@ -22,9 +22,33 @@ services:
       - AI_MODEL_PATH=models/yolo11m.pt
       - AI_CLASS_IDS=2,3,5,7
       - AI_CLASS_NAME_MAP=
-      - AI_IMGSZ=960
-      - ROI_MODE=full_frame
+      - AI_IMGSZ=640
+      - AI_CONFIDENCE=0.4
+      - AI_IOU=0.45
+      - AI_MAX_DET=100
+      - AI_AGNOSTIC_NMS=false
+      - AI_FRAME_SKIP=1
+      - TRACK_BUFFER=8
+      - TRACK_MATCH_THRESHOLD=0.3
+      - RENDER_SHOW_LOST=false
+      - RENDER_SHOW_OUT_OF_ZONE=false
+      - TRACK_FILTER_ZONE_PADDING_PX=12
+      - ROI_MODE=crop_rect
+      - ROI_CROP_PADDING=0.10
+      - OUTPUT_FRAME_MODE=roi
       - CELERY_QUEUE_NAME=trafficflow_gpu_queue
+      - LIVE_READER_BACKEND=auto
+      - LIVE_FFMPEG_OUTPUT_FPS=15
+      - LIVE_FFMPEG_REALTIME_PACING=true
+      - LIVE_FFMPEG_RW_TIMEOUT_US=10000000
+      - LIVE_FRAME_QUEUE_SIZE=1
+      - LIVE_MAX_FRAME_AGE_SECONDS=0.25
+      - LIVE_TRACK_MIN_HITS=3
+      - LIVE_TRACK_MAX_LOST_SECONDS=0.7
+      - LIVE_TRACK_RESET_GAP_SECONDS=1.0
+      - LIVE_RECONNECT_ATTEMPTS=3
+      - LIVE_RECONNECT_DELAY_SECONDS=1.0
+      - RENDER_DEBUG=false
       - YTDLP_COOKIES_FILE=/run/secrets/youtube_cookies.txt
       - YTDLP_JS_RUNTIME=node
       - YTDLP_REMOTE_COMPONENTS=ejs:github
@@ -57,9 +81,25 @@ services:
       - AI_MODEL_PATH=models/yolo11m.pt
       - AI_CLASS_IDS=2,3,5,7
       - AI_CLASS_NAME_MAP=
-      - AI_IMGSZ=960
-      - ROI_MODE=full_frame
+      - AI_IMGSZ=640
+      - AI_CONFIDENCE=0.4
+      - AI_IOU=0.45
+      - AI_MAX_DET=100
+      - AI_AGNOSTIC_NMS=false
+      - AI_FRAME_SKIP=1
+      - TRACK_BUFFER=8
+      - TRACK_MATCH_THRESHOLD=0.3
+      - RENDER_SHOW_LOST=false
+      - RENDER_SHOW_OUT_OF_ZONE=false
+      - TRACK_FILTER_ZONE_PADDING_PX=12
+      - ROI_MODE=crop_rect
+      - ROI_CROP_PADDING=0.10
+      - OUTPUT_FRAME_MODE=roi
       - CELERY_QUEUE_NAME=trafficflow_gpu_queue
+      - LIVE_READER_BACKEND=auto
+      - LIVE_FFMPEG_OUTPUT_FPS=15
+      - LIVE_FFMPEG_REALTIME_PACING=true
+      - LIVE_FFMPEG_RW_TIMEOUT_US=10000000
     depends_on:
       redis:
         condition: service_healthy
@@ -72,3 +112,5 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+
+

@@ -1,5 +1,14 @@
 # TrafficFlow Wiki Log
 
+## [2026-07-15] fix | Stable YouTube/HLS Live Inference at 15 FPS
+
+- Problem: after fixing frame tearing and tracker churn, live YouTube/HLS sessions still ran at only about 2-5 FPS even though YOLO11m inference was fast enough.
+- Diagnosis: HLS frame delivery arrived in bursts followed by stalls. The latest-only buffer protected latency but starved inference between bursts, so GPU idle time was hidden outside model timing.
+- Solution: added FFmpeg realtime pacing, a Python wall-clock pacer, stale-frame dropping, a dedicated synchronous live inference loop over the latest frame, and wall-clock timing metrics.
+- Baseline: `LIVE_FFMPEG_OUTPUT_FPS=15`, `LIVE_FFMPEG_REALTIME_PACING=true`, `LIVE_FRAME_QUEUE_SIZE=1`, `LIVE_MAX_FRAME_AGE_SECONDS=0.25`, `LIVE_TRACK_MIN_HITS=3`, `LIVE_TRACK_MAX_LOST_SECONDS=0.7`, `LIVE_TRACK_RESET_GAP_SECONDS=1.0`, `AI_MODEL_PATH=models/yolo11m.pt`, `AI_IMGSZ=640`, `RENDER_DEBUG=false`.
+- Validation: observed `14.97-15.05` FPS, `frame_interarrival_ms ~= 66.7`, `frame_age_ms ~= 0.7-1.3`, `frames_dropped=0`, `infer_wall_ms ~= 9-18`, `lost_tracks=0`, and `last_error=null`.
+- Next focus: counting accuracy, multi-lane counting semantics, local model warmup, explicit frontend `geometry_space`, and MongoDB Atlas TLS.
+
 ## [2026-05-31] ingest | Initialize TrafficFlow Wiki
 
 - Created the initial TrafficFlow wiki structure.
@@ -366,3 +375,33 @@ Current interpretation: the live path is operational and visually debuggable, bu
 - Batch E2E passed with `python scratch/_test_pipeline.py`: upload, preview, submit, poll, and result completed for task `22742ed7-d235-4194-ab0d-4349254e3a00`.
 - Live E2E passed with `python scratch/_test_live_vietnam_model.py`: validate-config, resolve YouTube HLS, start session, poll 30 seconds, fetch JPEG frame, and remove session.
 - Live final sample: `running`, `frames_read=914`, `frames_processed=88`, `frames_dropped=368`, `fps=2.59`, `lane_volume_total=1`, `last_error=null`.
+
+## [2026-07-14] batch | ROI crop-local pipeline
+
+- Switched batch defaults to `ROI_MODE=crop_rect`, `ROI_CROP_PADDING=0.10`, `AI_IMGSZ=640`, and `OUTPUT_FRAME_MODE=roi`.
+- Frontend now stores crop metadata and emits crop-local ROI/lane geometry while preserving original resolution and crop rects for traceability.
+- Worker and runtime engine now run inference on the cropped ROI frame and render ROI-only output for batch crop configs.
+- Disabled black polygon masking for the new `crop_rect` batch path; legacy `roi_crop` masking remains backward-compatible.
+- Live stream service now falls back to `full_frame` unless `LIVE_ROI_MODE` explicitly enables live crop testing.
+- Validation: `pytest tests -q` -> 144 passed, 1 warning; `npm --prefix frontend run build` passed.
+
+## [2026-07-15] fix | ROI Crop Live/Batch + Detection/Tracking Cleanup
+
+- Batch and live are now aligned on crop-first ROI behavior: `ROI_MODE=crop_rect`, `OUTPUT_FRAME_MODE=roi`, `AI_IMGSZ=640`, with live falling back to `full_frame` only when crop metadata is missing or invalid.
+- YouTube/HLS live ingest now uses an FFmpeg latest-frame reader with crop pushed into the FFmpeg filter graph, so Python receives ROI frames instead of full 1920x1080 frames.
+- Live loop now processes completed inference futures before blocking on stream reads and uses a bounded latest-frame queue to smooth bursty HLS segments without unbounded backlog.
+- Batch result publishing now keeps a local `/static/results/{task_id}.mp4` fallback when R2 upload fails, and output videos are transcoded to browser-playable H.264 MP4 (`yuv420p`, `+faststart`) before upload/publish.
+- Verified Cloudflare R2 `results/` prefix is reachable: object listing works, public URLs return `200`, `Content-Type=video/mp4`, and byte-range requests are supported.
+- Root cause for “video exists but does not play in web” was OpenCV `mp4v` output (`mpeg4` codec), not R2 path failure; new outputs are H.264.
+- Detection defaults were tightened for traffic videos: `AI_CONFIDENCE=0.4`, `AI_IOU=0.45`, `AI_MAX_DET=100`, `AI_AGNOSTIC_NMS=false`.
+- Tracking defaults were adjusted to reduce ghost IDs: `AI_FRAME_SKIP=1`, `TRACK_MATCH_THRESHOLD=0.3`, `TRACK_BUFFER=8`.
+- Added a pre-tracker lane/class filter using bbox bottom-center anchors and padded valid zones (`TRACK_FILTER_ZONE_PADDING_PX=12`) so the tracker does not create IDs for detections outside lane zones.
+- Renderer now hides lost tracks and out-of-zone tracks by default via `RENDER_SHOW_LOST=false` and `RENDER_SHOW_OUT_OF_ZONE=false`; these can be enabled for debug review.
+- Live session snapshots now include `perf.raw_det`, `perf.kept_det`, `perf.active_tracks`, and `perf.lost_tracks` to verify filter effectiveness.
+
+Validation:
+
+- `pytest tests/test_detection_filter.py tests/test_api_integration.py::TestConfig::test_settings_defaults tests/test_runtime_engine.py::test_process_video_crop_rect_uses_roi_frame_and_metadata -q` passed.
+- `npm --prefix frontend run build` passed.
+- `docker compose up -d --build` completed and container settings were verified as `AI_CONFIDENCE=0.4`, `AI_FRAME_SKIP=1`, `TRACK_BUFFER=8`, `TRACK_MATCH_THRESHOLD=0.3`, `RENDER_SHOW_LOST=false`, `RENDER_SHOW_OUT_OF_ZONE=false`, `AI_IOU=0.45`, `AI_MAX_DET=100`.
+

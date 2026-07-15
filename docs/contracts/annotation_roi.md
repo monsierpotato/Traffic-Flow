@@ -4,6 +4,11 @@
 
 ## Coordinate Rule
 
+New live configs should explicitly set `geometry_space` to either
+`source_frame` or `crop_local`.  Runtime normalizes `source_frame` once by
+subtracting the processing-ROI offset; `crop_local` is already normalized.
+Older configs without this field retain the historical inference rule.
+
 The frontend displays the cropped processing ROI for lane drawing. Lane geometry may be submitted in full-frame source coordinates for backward compatibility:
 
 ```text

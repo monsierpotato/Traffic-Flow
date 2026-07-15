@@ -3,6 +3,7 @@
 from typing import List, Optional
 import cv2
 import numpy as np
+from shared.config import settings
 from worker.services.counting_service import bbox_bottom_center, point_in_polygon
 from worker.pipeline.tracker import TrackOutput
 
@@ -10,8 +11,9 @@ from worker.pipeline.tracker import TrackOutput
 class FrameRenderer:
     """Draws lane geometry + detection tracks onto a frame."""
 
-    def __init__(self, lanes: List[dict]):
+    def __init__(self, lanes: List[dict], settings_obj=settings):
         self.lanes = lanes
+        self.settings = settings_obj
 
     def draw(self, frame: np.ndarray, detections: List[dict], debug: dict | None = None) -> np.ndarray:
         """Mutate ``frame`` in-place with overlays (returns it for chaining)."""
@@ -33,12 +35,18 @@ class FrameRenderer:
             bbox = det.get("bbox_xyxy")
             if not bbox or len(bbox) != 4:
                 continue
+            if not det.get("confirmed", True):
+                continue
+            if det.get("is_lost") and not self.settings.RENDER_SHOW_LOST:
+                continue
             x1, y1, x2, y2 = map(int, bbox)
             track_id = det.get("track_id", "")
             cls_name = det.get("class_name", "")
 
             anchor = bbox_bottom_center(bbox)
             in_any_zone = self._in_any_zone(anchor)
+            if not in_any_zone and not self.settings.RENDER_SHOW_OUT_OF_ZONE:
+                continue
 
             if in_any_zone:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)

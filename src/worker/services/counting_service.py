@@ -187,12 +187,14 @@ class CountingState:
                 continue
 
             cls_name = det.get("class_name", "unknown")
+            if not det.get("confirmed", True):
+                continue
             lost = det.get("lost_frames", 0)
             is_lost = bool(det.get("is_lost", False)) or int(lost or 0) > 0
             if is_lost:
                 continue
 
-            center = bbox_bottom_center(bbox)
+            center = bbox_bottom_center([x1, y1, x2, y2])
             previous_smooth = self._smoothed_anchor.get(tid)
             if previous_smooth is None:
                 smooth_center = center
@@ -256,6 +258,22 @@ class CountingState:
                 })
                 logger.debug(f"Counted: track_id={tid}, class={cls_name}, lane={best}"
                              f"{' (lost+predicted)' if lost else ''}")
+
+    def prune_inactive_tracks(self, active_track_ids: Set[int]) -> None:
+        """Discard transient debug/lane state once a tracker removes an ID.
+
+        Counted-ID sets remain intact, so historical totals and diagnostics do
+        not change.  This prevents debug overlays from growing for a whole live
+        session.
+        """
+        for tid in set(self._smoothed_anchor) - active_track_ids:
+            self._last_center.pop(tid, None)
+            self._assigned_lane.pop(tid, None)
+            self._lane_candidate.pop(tid, None)
+            self._lane_candidate_frames.pop(tid, None)
+            self._track_age.pop(tid, None)
+            self._anchor_history.pop(tid, None)
+            self._smoothed_anchor.pop(tid, None)
 
     def get_statistics(self) -> List[dict]:
         stats = []

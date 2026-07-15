@@ -30,11 +30,11 @@ The live session loop is intentionally non-blocking. It reads frames continuousl
 
 Use these commands while a live session is running:
 
-`powershell
+~~~powershell
 docker compose logs --tail=200 api | Select-String -Pattern 'live/sessions|Live source opened|Live inference ready|Live session tick|Live session failed'
 curl http://localhost:8000/live/sessions
 nvidia-smi
-` 
+~~~
 
 - `stage` / `stage_detail`: user-facing batch progress phase.
 - `frames_processed`: frames actually inferred.
@@ -158,3 +158,102 @@ Live smoke result on `https://youtu.be/1EamsYw_Xyo` for 30 seconds:
 - Frame output saved during validation: `scratch/live_vietnam_model_frame.jpg`.
 
 Important operating note: in live mode, `frames_dropped` is not automatically a failure. It means the pipeline is intentionally discarding stale source frames while GPU inference is busy, so the visual output stays close to realtime instead of building a delayed backlog.
+
+## Live HLS Stable Baseline -- 2026-07-15
+
+The YouTube/HLS live path is now stable at the configured 15 FPS target.
+
+### Problem -> Solution Timeline
+
+1. Problem: live frames from YouTube showed horizontal tearing and repeated bands.
+   Solution: FFmpeg raw `bgr24` ingest now reads exactly `width * height * 3` bytes per frame, forces even crop dimensions, uses deterministic crop output, and hands downstream code owned frame copies. Invalid raw reads restart the FFmpeg reader and reset live state instead of feeding corrupted frames into YOLO/tracking.
+
+2. Problem: tracker IDs churned and old/lost IDs stayed visible.
+   Solution: live sessions now own tracker/counting/render state per session, reset on reconnect/input gaps, use timestamp-aware Kalman prediction, time-based lost-track expiry, minimum hits before confirmation, multi-criteria association, and production rendering hides tentative/lost/out-of-zone tracks.
+
+3. Problem: debug anchor history polluted production output.
+   Solution: production rendering now passes debug overlays only when `RENDER_DEBUG=true`, prunes inactive anchor/lane history, and keeps short track trails instead of unbounded historical anchors.
+
+4. Problem: lane points could be interpreted in the wrong coordinate space after ROI cropping.
+   Solution: live config supports explicit `geometry_space` with `source_frame` and `crop_local`; session validation and logs show normalized geometry before counting starts.
+
+5. Problem: after frame integrity was fixed, observed live FPS was only about 2-5 FPS despite YOLO11m inference taking about 50 ms or less.
+   Diagnosis: HLS delivered frames in segment bursts, then stalled. A latest-only queue prevented latency buildup but also let FFmpeg overwrite many burst frames while inference later waited for the next segment, leaving the GPU idle.
+   Solution: FFmpeg realtime pacing (`-re`) and a Python wall-clock pacer smooth HLS frame delivery. The live loop no longer polls a future from the stream reader loop; it takes the latest paced frame, drops stale frames older than `LIVE_MAX_FRAME_AGE_SECONDS`, runs inference synchronously, publishes, then immediately takes the next latest frame.
+
+### Stable Runtime Baseline
+
+Current stable live config:
+
+```env
+LIVE_FFMPEG_OUTPUT_FPS=15
+LIVE_FFMPEG_REALTIME_PACING=true
+LIVE_FRAME_QUEUE_SIZE=1
+LIVE_MAX_FRAME_AGE_SECONDS=0.25
+
+LIVE_TRACK_MIN_HITS=3
+LIVE_TRACK_MAX_LOST_SECONDS=0.7
+LIVE_TRACK_RESET_GAP_SECONDS=1.0
+
+AI_MODEL_PATH=models/yolo11m.pt
+AI_IMGSZ=640
+RENDER_DEBUG=false
+```
+
+Observed validation after the pacing/scheduler fix:
+
+- FPS stays around `14.97-15.05`, matching `LIVE_FFMPEG_OUTPUT_FPS=15`.
+- `frame_interarrival_ms` is about `66.7 ms`, matching 15 FPS pacing.
+- `frame_age_ms` is about `0.7-1.3 ms`, so there is effectively no backlog.
+- `frames_dropped=0`.
+- `infer_wall_ms` is usually `9-18 ms`.
+- `lost_tracks=0`.
+- `last_error=null`.
+- `reader_wait_ms` / `loop_idle_ms` around `45-55 ms` is expected because the loop is waiting for the next paced frame, not because YOLO is saturated.
+
+Conclusion: YOLO11m is not the current bottleneck at 15 FPS. The previous low FPS was caused by HLS burst/stall delivery plus scheduling, not detector speed.
+
+### Metrics Added for Future Debugging
+
+Live session `perf` now exposes:
+
+- `reader_wait_ms`
+- `frame_interarrival_ms`
+- `frame_age_ms`
+- `infer_wall_ms`
+- `future_done_wait_ms`
+- `loop_idle_ms`
+- `publish_ms`
+
+Interpretation:
+
+- If `infer_wall_ms < 70 ms` and `loop_idle_ms` is high, the pipeline is waiting for paced frames.
+- If `infer_wall_ms` grows to `200-300 ms`, investigate CUDA synchronization, model contention, or inference-client scheduling.
+- If `frame_age_ms` p95 exceeds `250 ms`, the pipeline is accumulating latency and should drop stale frames.
+
+### Next Focus: Counting Accuracy
+
+The live pipeline should now shift from FPS work to counting accuracy. Use a 5-10 minute clip and manually count:
+
+- `lane_1`: car, motorcycle, bus, truck
+- `lane_2`: car, motorcycle, bus, truck
+
+Compare with:
+
+```text
+absolute_error = |predicted - ground_truth|
+error_percent = absolute_error / max(ground_truth, 1) * 100%
+```
+
+Initial target:
+
+- total counting error below `10-15%`;
+- no duplicate count for the same vehicle within one lane;
+- no systematic missed counts during dense traffic.
+
+### Open Production Follow-Ups
+
+- Decide multi-lane semantics. Current observed sample had `lane_volume_total=92`, `global_unique_count=84`, `multi_lane_track_count=8`. If lanes represent exclusive road directions, add a `COUNT_ALLOW_MULTI_LANE=false` style guard so one track cannot be counted in multiple lanes.
+- Add local model warmup before session status becomes `running`; first inference can take about `3382 ms` and can trigger one input-gap reset.
+- Update frontend live config payload to send `geometry_space: "crop_local"` explicitly instead of relying on backend inference.
+- Resolve MongoDB Atlas TLS handshake before multi-machine production or any deployment requiring durable persistence beyond local JSON fallback.
