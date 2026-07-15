@@ -17,7 +17,8 @@ The MVP target is a local end-to-end system: upload video, draw lane with rectan
 - **COCO 4-class canonical**: car(2), motorcycle(3), bus(5), truck(7). OpenCV 4.10.x (not 5.0.0).
 - **Benchmark system**: `run_benchmark.py` CLI, 8 presets, stage profiler, ground truth comparison.
 - **UA-DETRAC integrated**: parser, converter, 3 sequences benchmarked. Key result: `optimized-a-yolov8n-fp16-640` = 6% count error, 24 FPS, 1.8× on RTX 5070 Ti.
-- **Next 2026-07-11**: tune lane config per DETRAC video, add model comparison (n vs s), final portfolio report.
+- **Live HLS stable baseline**: YouTube/HLS live inference is stable at `15 FPS` with `YOLO11m`, `AI_IMGSZ=640`, `ROI_MODE=crop_rect`, realtime FFmpeg pacing, latest-frame scheduling, near-zero frame age, `frames_dropped=0`, and `lost_tracks=0`.
+- **Current next focus**: measure counting accuracy on a 5-10 minute manually labeled clip, decide multi-lane counting semantics, add local model warmup, send explicit `geometry_space` from frontend, and resolve MongoDB Atlas TLS for durable production persistence.
 
 ## Ownership
 
