@@ -11,8 +11,9 @@ from worker.pipeline.tracker import TrackOutput
 class FrameRenderer:
     """Draws lane geometry + detection tracks onto a frame."""
 
-    def __init__(self, lanes: List[dict]):
+    def __init__(self, lanes: List[dict], settings_obj=settings):
         self.lanes = lanes
+        self.settings = settings_obj
 
     def draw(self, frame: np.ndarray, detections: List[dict], debug: dict | None = None) -> np.ndarray:
         """Mutate ``frame`` in-place with overlays (returns it for chaining)."""
@@ -36,7 +37,7 @@ class FrameRenderer:
                 continue
             if not det.get("confirmed", True):
                 continue
-            if det.get("is_lost") and not settings.RENDER_SHOW_LOST:
+            if det.get("is_lost") and not self.settings.RENDER_SHOW_LOST:
                 continue
             x1, y1, x2, y2 = map(int, bbox)
             track_id = det.get("track_id", "")
@@ -44,7 +45,7 @@ class FrameRenderer:
 
             anchor = bbox_bottom_center(bbox)
             in_any_zone = self._in_any_zone(anchor)
-            if not in_any_zone and not settings.RENDER_SHOW_OUT_OF_ZONE:
+            if not in_any_zone and not self.settings.RENDER_SHOW_OUT_OF_ZONE:
                 continue
 
             if in_any_zone:

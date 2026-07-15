@@ -542,7 +542,7 @@ class LiveSessionManager:
                 roi_mode=live_roi_mode,
                 enable_stabilization=False,
             )
-            renderer = FrameRenderer(lanes_processing or [])
+            renderer = FrameRenderer(lanes_processing or [], settings_obj=settings)
             tracker = LocalTracker(
                 match_threshold=settings.TRACK_MATCH_THRESHOLD,
                 track_buffer=settings.TRACK_BUFFER,
