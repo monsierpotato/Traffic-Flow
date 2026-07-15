@@ -9,6 +9,7 @@ import pytest
 from tfengine.cli.config_generator import (
     ConfigSession,
     AnnotationRoi,
+    bounding_roi,
     parse_annotation_roi,
     validate_annotation_roi,
 )
@@ -57,6 +58,14 @@ def test_validate_annotation_roi_negative_origin() -> None:
     roi = AnnotationRoi(x=-10, y=200, width=800, height=600)
     with pytest.raises(ValueError, match="ROI origin must be non-negative"):
         validate_annotation_roi(roi, frame)
+
+def test_bounding_roi_from_polygon_points() -> None:
+    roi = bounding_roi([(100, 120), (300, 80), (280, 260), (90, 240)])
+
+    assert roi.x == 90
+    assert roi.y == 80
+    assert roi.width == 210
+    assert roi.height == 180
 
 
 def test_config_session_initialization() -> None:
@@ -108,6 +117,28 @@ def test_config_session_save_creates_config(tmp_path: Path) -> None:
     assert "resolution" in config
     assert config["resolution"]["width"] == 640
     assert config["resolution"]["height"] == 480
+
+def test_config_session_save_includes_polygon_roi(tmp_path: Path) -> None:
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    output_path = tmp_path / "config.json"
+    polygon = [(100, 100), (420, 90), (500, 300), (120, 340), (80, 180)]
+    annotation_roi = bounding_roi(polygon)
+    session = ConfigSession(frame, output_path, "test_cam", 640, annotation_roi, polygon)
+    session.lanes = [
+        {
+            "lane_id": "lane_1",
+            "counting_line": [[120, 200], [480, 200]],
+            "class_allowed": ["car"],
+        }
+    ]
+    session.save()
+
+    import json
+
+    config = json.loads(output_path.read_text(encoding="utf-8"))
+    assert config["roi_polygon"] == [[100, 100], [420, 90], [500, 300], [120, 340], [80, 180]]
+    assert config["annotation_roi"]["x"] == 80
+    assert config["annotation_roi"]["width"] == 420
 
 
 def test_counting_parse_args_minimal() -> None:

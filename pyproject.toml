@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 license = { text = "Proprietary" }
 
 dependencies = [
-    "opencv-python",
+    "opencv-python==4.10.0.84",
     "numpy",
 ]
 
@@ -28,6 +28,7 @@ api = [
     "apscheduler",
     "boto3",
     "python-multipart",
+    "yt-dlp",
 ]
 gpu = [
     "ultralytics",

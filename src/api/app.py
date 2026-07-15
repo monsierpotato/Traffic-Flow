@@ -6,8 +6,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from lib.config import settings
-from lib.database import connect_to_mongo, close_mongo_connection
+from shared.config import settings
+from shared.database import connect_to_mongo, close_mongo_connection
 from api.routes.router import v1_router
 from api.services.cleanup_service import run_data_cleanup
 
@@ -60,6 +60,12 @@ def create_app() -> FastAPI:
     # Include V1 API Router
     app.include_router(v1_router, prefix="/api/v1")
 
+    # Frontend compatibility routes (maps /videos/*, /tasks/* to API)
+    from api.routes.frontend_compat import router as compat_router
+    from api.routes.live import router as live_router
+    app.include_router(compat_router)
+    app.include_router(live_router, prefix="/live", tags=["Live Compat"])
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         logger.error(f"Validation error on {request.method} {request.url}")
@@ -83,7 +89,7 @@ def create_app() -> FastAPI:
 
     # Serve built frontend static files
     from pathlib import Path
-    frontend_dist_dir = Path("../frontend/dist")
+    frontend_dist_dir = Path("frontend/dist")
     if frontend_dist_dir.exists():
         app.mount("/", StaticFiles(directory=str(frontend_dist_dir), html=True), name="frontend")
         logger.info("Mounted frontend dist directory at '/'")

@@ -5,13 +5,21 @@
     "width": 1920,
     "height": 1080
   },
+  "processing_roi": {
+    "type": "rectangle",
+    "x": 400,
+    "y": 300,
+    "width": 900,
+    "height": 400,
+    "purpose": "inference_processing"
+  },
   "annotation_roi": {
     "type": "rectangle",
     "x": 400,
     "y": 300,
     "width": 900,
     "height": 400,
-    "purpose": "frontend_annotation_only"
+    "purpose": "legacy_processing_roi"
   },
   "method": "counting_gate",
   "settings": {

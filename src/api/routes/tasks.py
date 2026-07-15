@@ -1,13 +1,14 @@
 from datetime import datetime
 import asyncio
+import os
 import urllib.request
 import logging
 from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
-from lib.database import get_database, db_instance
-from lib.config import settings
+from shared.database import get_database, db_instance
+from shared.config import settings
 from worker.celery_app import celery_app
-from lib.r2_client import r2_client
+from shared.r2_client import r2_client
 from api.services.video_service import crop_video
 from api.schemas.task import (
     TaskCreateRequest,
@@ -76,8 +77,13 @@ async def process_task(
             detail="No lane configuration found. Please post config first."
         )
 
-    base_url = str(request.base_url)
-    callback_url = f"{base_url.rstrip('/')}/api/v1/tasks/progress/{task_id}"
+    # Use CALLBACK_HOST for Docker compatibility; fallback to request.base_url
+    callback_host = getattr(settings, "CALLBACK_HOST", None) or os.environ.get("CALLBACK_HOST", "")
+    if callback_host:
+        callback_url = f"{callback_host.rstrip('/')}/api/v1/tasks/progress/{task_id}"
+    else:
+        base_url = str(request.base_url)
+        callback_url = f"{base_url.rstrip('/')}/api/v1/tasks/progress/{task_id}"
 
     await db.tasks.update_one(
         {"task_id": task_id},
@@ -85,6 +91,8 @@ async def process_task(
             "$set": {
                 "status": "pending",
                 "progress": 0,
+                "stage": "queued",
+                "stage_detail": "Waiting for worker capacity",
                 "updated_at": datetime.utcnow()
             }
         }
@@ -99,15 +107,22 @@ async def process_task(
         "method": lane_config.get("method", "counting_gate"),
         "settings": lane_config.get("settings"),
         "lanes": lane_config.get("lanes", []),
-        "video_id": lane_config.get("video_id")
+        "video_id": lane_config.get("video_id"),
+        "task_id": lane_config.get("task_id"),
     }
+    # Strip non-serializable MongoDB fields
+    for k in ("_id", "created_at", "updated_at"):
+        serializable_config.pop(k, None)
     
     # Directly enqueue task with original video URL and config
+    # Use working (1080p) copy for processing; fallback to original
+    process_video_url = task.get("working_video_url") or task["video_url"]
+
     celery_app.send_task(
         "trafficflow.process_video",
-        args=[task_id, task["video_url"], serializable_config, callback_url],
+        args=[task_id, process_video_url, serializable_config, callback_url],
         task_id=task_id,
-        queue="trafficflow_queue"
+        queue=settings.CELERY_QUEUE_NAME,
     )
 
     return TaskCreateResponse(
@@ -133,6 +148,8 @@ async def get_task_status(
         task_id=task["task_id"],
         status=task["status"],
         progress=task["progress"],
+        stage=task.get("stage"),
+        stage_detail=task.get("stage_detail"),
         created_at=task["created_at"],
         updated_at=task["updated_at"],
         error_message=task.get("error_message")
@@ -155,6 +172,8 @@ async def task_progress_callback(
     update_fields = {
         "status": payload.status,
         "progress": payload.progress,
+        "stage": payload.stage,
+        "stage_detail": payload.stage_detail,
         "updated_at": datetime.utcnow()
     }
 
@@ -164,6 +183,10 @@ async def task_progress_callback(
     if payload.status == "completed":
         update_fields["result_video_url"] = payload.result_video_url
         update_fields["events_url"] = payload.events_url
+        update_fields["lane_volume_total"] = payload.lane_volume_total
+        update_fields["global_unique_count"] = payload.global_unique_count
+        update_fields["multi_lane_track_count"] = payload.multi_lane_track_count
+        update_fields["multi_lane_tracks"] = payload.multi_lane_tracks
 
         # Insert stats to DB if provided
         if payload.statistics:
@@ -269,7 +292,11 @@ async def get_task_result(
         result_video_url=task.get("result_video_url"),
         events_url=task.get("events_url"),
         statistics=result_statistics,
-        total_vehicles=total_vehicles,
+        total_vehicles=task.get("global_unique_count") or total_vehicles,
+        lane_volume_total=task.get("lane_volume_total") or total_vehicles,
+        global_unique_count=task.get("global_unique_count") or total_vehicles,
+        multi_lane_track_count=task.get("multi_lane_track_count") or 0,
+        multi_lane_tracks=task.get("multi_lane_tracks") or [],
         processing_time_seconds=proc_time,
         lane_config=lane_config
     )
