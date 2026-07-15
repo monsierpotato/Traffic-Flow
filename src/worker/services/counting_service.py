@@ -194,7 +194,7 @@ class CountingState:
             if is_lost:
                 continue
 
-            center = bbox_bottom_center(bbox)
+            center = bbox_bottom_center([x1, y1, x2, y2])
             previous_smooth = self._smoothed_anchor.get(tid)
             if previous_smooth is None:
                 smooth_center = center
