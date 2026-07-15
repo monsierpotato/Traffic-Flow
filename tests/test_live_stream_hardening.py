@@ -3,15 +3,15 @@ import os
 # `shared.config.settings` is intentionally a process singleton.  Set the
 # repository's test values before importing the live service so this focused
 # test can also run before the broader API integration module.
-os.environ["MONGODB_DB_NAME"] = "trafficflow_test"
-os.environ["MONGODB_URI"] = "mongodb://localhost:27017/"
-os.environ["REDIS_URL"] = "redis://localhost:6379/0"
-os.environ["R2_ACCOUNT_ID"] = "placeholder_account_id"
-os.environ["R2_ACCESS_KEY_ID"] = "placeholder_access_key"
-os.environ["R2_SECRET_ACCESS_KEY"] = "placeholder_secret_key"
-os.environ["R2_BUCKET_NAME"] = "trafficflow"
-os.environ["R2_PUBLIC_URL"] = "http://localhost:8000/static/previews"
-os.environ["AI_SERVING_URL"] = "https://example.com"
+os.environ.setdefault("MONGODB_DB_NAME", "trafficflow_test")
+os.environ.setdefault("MONGODB_URI", "mongodb://localhost:27017/")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("R2_ACCOUNT_ID", "placeholder_account_id")
+os.environ.setdefault("R2_ACCESS_KEY_ID", "placeholder_access_key")
+os.environ.setdefault("R2_SECRET_ACCESS_KEY", "placeholder_secret_key")
+os.environ.setdefault("R2_BUCKET_NAME", "trafficflow")
+os.environ.setdefault("R2_PUBLIC_URL", "http://localhost:8000/static/previews")
+os.environ.setdefault("AI_SERVING_URL", "https://example.com")
 
 import time
 
