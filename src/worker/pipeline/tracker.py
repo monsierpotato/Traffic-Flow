@@ -25,7 +25,10 @@ def _iou_xyxy(a: List[float], b: List[float]) -> float:
 def _valid_bbox_xyxy(bbox: List[float]) -> bool:
     if not bbox or len(bbox) != 4:
         return False
-    x1, y1, x2, y2 = [float(v) for v in bbox]
+    try:
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+    except (TypeError, ValueError):
+        return False
     return np.isfinite([x1, y1, x2, y2]).all() and x2 > x1 and y2 > y1
 
 
