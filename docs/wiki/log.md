@@ -1,5 +1,14 @@
 # TrafficFlow Wiki Log
 
+## [2026-07-15] lint | Wiki Health Check After Stable Live Baseline
+
+- Checked wiki index, log, Obsidian links, and relative Markdown links.
+- No broken Obsidian links found across current wiki pages.
+- No broken relative Markdown links found under `docs/wiki`.
+- Updated `docs/wiki/ai-workflow/gpu-docker-live-optimization.md` to mark old `pending_future`, `AI_IMGSZ=960`, and `ROI_MODE=full_frame` notes as historical and document the current `YOLO11m`, `AI_IMGSZ=640`, `crop_rect`, paced 15 FPS baseline.
+- Updated `docs/wiki/index.md` to include `Backend Refactor Plan` and `Frontend Deploy Readiness`.
+- Updated `docs/wiki/frontend-deploy-readiness.md` and `docs/wiki/sprints/project-backlog.md` to reflect the current crop-first live baseline and next focus on counting accuracy.
+
 ## [2026-07-15] fix | Stable YouTube/HLS Live Inference at 15 FPS
 
 - Problem: after fixing frame tearing and tracker churn, live YouTube/HLS sessions still ran at only about 2-5 FPS even though YOLO11m inference was fast enough.
