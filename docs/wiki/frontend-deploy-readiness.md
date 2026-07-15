@@ -94,3 +94,66 @@ Validation completed:
 - Live E2E final sampled status: `running`, `frames_read=914`, `frames_processed=88`, `frames_dropped=368`, `fps=2.59`, `lane_volume_total=1`, `last_error=null`.
 
 Conclusion: Epics 1-5 are complete for the current deploy-readiness frontend pass.
+
+## Epic 6 — Batch ROI Crop Pipeline (2026-07-14)
+
+Goal: switch batch processing from full-frame/black-mask ROI behavior to padded ROI crop inference and ROI-only output while keeping live stream fallback safe.
+
+Completed changes:
+
+- Frontend still draws ROI on the original preview, then computes a tight ROI bbox plus `ROI_CROP_PADDING=0.10` and displays the padded crop in the lane editor.
+- Batch lane config now emits crop-local `roi_polygon`, lane zones, counting lines, direction vectors, `roi_mode=crop_rect`, `output_frame_mode=roi`, `model_imgsz=640`, original resolution, padded crop rect, and processing resolution.
+- Worker batch processing crops decoded frames before model inference for `crop_rect`; it no longer applies a black polygon mask on that path.
+- Output video for batch `output_frame_mode=roi` is rendered at the padded crop resolution with crop-local overlays and detections.
+- Task callbacks/results now carry `roi_mode`, `output_frame_mode`, original/processing resolutions, and crop rect metadata.
+- Live now uses the stable crop-first baseline (`ROI_MODE=crop_rect`, `OUTPUT_FRAME_MODE=roi`, `AI_IMGSZ=640`) when valid crop metadata is available, and falls back to full-frame only when crop metadata is missing or invalid.
+
+Validation:
+
+- `pytest tests -q` passed with 144 tests and 1 deprecation warning.
+- `npm --prefix frontend run build` passed.
+
+## Epic 7 — ROI Live Stability and Clean Batch Output (2026-07-15)
+
+Goal: make uploaded-video output playable in the web UI, keep live ROI crop mode fast enough for HLS sources, and reduce noisy false track IDs in ROI outputs.
+
+Current runtime defaults:
+
+- `ROI_MODE=crop_rect`
+- `OUTPUT_FRAME_MODE=roi`
+- `AI_IMGSZ=640`
+- `AI_CONFIDENCE=0.4`
+- `AI_IOU=0.45`
+- `AI_MAX_DET=100`
+- `AI_FRAME_SKIP=1`
+- `TRACK_MATCH_THRESHOLD=0.3`
+- `TRACK_BUFFER=8`
+- `TRACK_FILTER_ZONE_PADDING_PX=12`
+- `RENDER_SHOW_LOST=false`
+- `RENDER_SHOW_OUT_OF_ZONE=false`
+
+Completed changes:
+
+- Batch output video is ROI-only and published through `outputs.video_path`; if R2 upload is unavailable, the worker writes `/static/results/{task_id}.mp4`.
+- Worker transcodes rendered MP4 artifacts to browser-compatible H.264 before publishing, fixing cases where R2 returned a valid MP4 that the browser could not play.
+- Cloudflare R2 `results/` access was verified independently: list, public `HEAD`, and byte-range `GET` all work.
+- Live YouTube/HLS uses FFmpeg latest-frame ingest and crops in FFmpeg before piping frames to Python, reducing full-frame copy/decode pressure.
+- Frontend live result view should show ROI-only annotated JPEG frames, while batch result view should play the H.264 ROI MP4 from R2 or local static fallback.
+- Detection noise mitigation is now part of the processing path: raw YOLO detections are filtered by lane `valid_zone` and `class_allowed` before tracker update, using bottom-center anchors.
+- Output overlays hide lost/out-of-zone tracks by default so operator-facing videos do not show grey ghost IDs unless debug flags are enabled.
+
+Operator validation checklist:
+
+- After a batch completes, call `/tasks/{task_id}/result` and confirm `outputs.video_path` is non-empty.
+- Open `outputs.video_path` directly; it should return `200`, `Content-Type: video/mp4`, and support `Accept-Ranges: bytes`.
+- Run `ffprobe` on the returned video and confirm `codec_name=h264` and `pix_fmt=yuv420p` for new outputs.
+- Inspect worker logs for `raw_det`, `kept_det`, `active_tracks`, and `lost_tracks`; expected behavior is `kept_det` much lower than `raw_det` on noisy traffic scenes.
+- If false motorcycles remain high, raise `AI_CONFIDENCE` to `0.5` for the next test run before changing tracker settings.
+
+Validation completed:
+
+- Detection filter tests passed.
+- Runtime crop regression test passed.
+- Frontend production build passed.
+- Docker API/worker containers were rebuilt with the new defaults.
+

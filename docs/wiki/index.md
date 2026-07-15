@@ -2,8 +2,10 @@
 
 ## Architecture
 - [[Production Architecture]] - Planned system boundaries for API, worker, queue, storage, observability, and the reusable AI runtime.
+- [[Backend Refactor Plan]] - Historical package-structure audit and refactor plan leading to the current `src/` layout.
 - [[Geometry Config Scaling]] - Phased plan for removing the manual per-camera geometry bottleneck (industrialize manual config, then automate inference).
 - [[Local DB Fallback]] - Development fallback when MongoDB Atlas TLS/connectivity fails during local E2E.
+- [[Frontend Deploy Readiness]] - Frontend/API readiness notes for deployable user workflows.
 
 ## AI Workflow
 - [[Runtime Engine]] - The reusable counting workflow shared by CLI now and future API/worker code.

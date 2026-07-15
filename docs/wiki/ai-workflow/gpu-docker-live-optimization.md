@@ -24,23 +24,26 @@ Keep the website responsive during batch video processing and prepare the same r
 
 ## Live Camera Preparation
 
-The live session loop is intentionally non-blocking. It reads frames continuously, submits inference only when no inference future is pending, and increments `frames_dropped` when it must skip a candidate inference frame. This keeps output near real time instead of building an ever-growing latency queue.
+The current stable live loop is paced and latest-frame based. FFmpeg reads HLS frames with realtime pacing, Python applies a wall-clock pacer, and the inference loop processes the newest available frame synchronously. Frames older than `LIVE_MAX_FRAME_AGE_SECONDS` are dropped instead of building latency. This keeps output near real time while avoiding the old `pending_future` polling loop that could leave the GPU waiting during HLS burst/stall delivery.
 
 ## Monitoring Signals
 
 Use these commands while a live session is running:
 
-~~~powershell
+```powershell
 docker compose logs --tail=200 api | Select-String -Pattern 'live/sessions|Live source opened|Live inference ready|Live session tick|Live session failed'
 curl http://localhost:8000/live/sessions
 nvidia-smi
-~~~
+```
 
 - `stage` / `stage_detail`: user-facing batch progress phase.
 - `frames_processed`: frames actually inferred.
 - `frames_read`: source frames consumed.
 - `frames_dropped`: live frames skipped to preserve realtime behavior.
-- Benchmark `inference` latency: measured from frame submit to future completion.
+- `frame_interarrival_ms`: reader pacing interval.
+- `frame_age_ms`: how stale the processed frame is when inference starts.
+- `infer_wall_ms`: wall-clock time from inference submit to result.
+- `reader_wait_ms` / `loop_idle_ms`: time spent waiting for the next paced frame.
 
 ## Next Options
 
@@ -55,7 +58,7 @@ nvidia-smi
 
 Live inference must run on OpenCV 4.10.x. OpenCV 5.0.0 can crash the YOLO/Kalman live path with `matmul.dispatch.cpp:363` / `cv::gemm`. Docker therefore removes any `opencv-python`/`opencv-contrib-python` wheel pulled by transitive dependencies and reinstalls only `opencv-python-headless==4.10.0.84` at the end of dependency installation.
 
-Latest live smoke test:
+Earlier live smoke test before the 15 FPS HLS pacing fix:
 
 - Source: `https://youtu.be/sJvEFrG0wq0` resolved to YouTube HLS.
 - Config: 1920x1080, processing ROI, ROI polygon, 2 lanes, counting lines, direction vectors.
@@ -85,42 +88,52 @@ The model file is stored at `models/vietnamese_vehicle_detection/my_finetuned_yo
 
 Initial live smoke test on `https://youtu.be/1EamsYw_Xyo` ran without runtime errors but did not produce reliable detections in the sampled interval. Direct prediction showed low-confidence output, so this model should be treated as an experiment rather than a production improvement until more calibration/fine-tuning is done.
 
-## Current Model Choice
+## Current Stable Model Choice
 
-Runtime has been switched back to a COCO-compatible model, but stronger than the original nano/small models during the current experiment:
+Runtime has been switched back to a COCO-compatible model, but stronger than the original nano/small models:
 
 - `AI_MODEL_PATH=models/yolo11m.pt`
 - `AI_CLASS_IDS=2,3,5,7`
 - `AI_CLASS_NAME_MAP=`
-- `AI_IMGSZ=960`
+- `AI_IMGSZ=640`
 
 This keeps class semantics aligned with existing TrafficFlow labels while using a stronger detector on local GPU hardware. The Vietnamese custom model remains downloaded for future experiments but is not the active runtime model.
 
-### YOLOv8m Result
+Stable live runtime also uses:
 
-`YOLOv8m` at `AI_IMGSZ=960` is currently active for visual evaluation. In a 30-second smoke test on `https://youtu.be/1EamsYw_Xyo`, it produced clearer vehicle boxes than `YOLOv8s` but reduced live throughput to about 4-5 processed FPS. The test also exposed an oversized lost-track overlay, so live tracking cleanup is a likely next improvement.
+- `ROI_MODE=crop_rect`
+- `OUTPUT_FRAME_MODE=roi`
+- `LIVE_FFMPEG_OUTPUT_FPS=15`
+- `LIVE_FFMPEG_REALTIME_PACING=true`
+- `LIVE_FRAME_QUEUE_SIZE=1`
+- `LIVE_MAX_FRAME_AGE_SECONDS=0.25`
+- `RENDER_DEBUG=false`
 
-### YOLO11m Result
+### Historical YOLOv8m Result
 
-`YOLO11m` at `AI_IMGSZ=960` is currently active. In a 30-second smoke test on `https://youtu.be/1EamsYw_Xyo`, it reached about 3-4 processed FPS and counted 2 motorcycles in lane 1 during the sampled interval. It appears more sensitive than `YOLOv8m` on this stream, but the FPS tradeoff is noticeable.
+`YOLOv8m` at `AI_IMGSZ=960` was tested for visual evaluation. In a 30-second smoke test on `https://youtu.be/1EamsYw_Xyo`, it produced clearer vehicle boxes than `YOLOv8s` but reduced live throughput to about 4-5 processed FPS. The test also exposed an oversized lost-track overlay, which was later addressed by tracker/rendering cleanup.
+
+### Historical YOLO11m at 960 Result
+
+`YOLO11m` at `AI_IMGSZ=960` reached about 3-4 processed FPS in a 30-second smoke test on `https://youtu.be/1EamsYw_Xyo` and counted 2 motorcycles in lane 1 during the sampled interval. It appeared more sensitive than `YOLOv8m`, but the FPS tradeoff was noticeable. The stable live baseline now uses `YOLO11m` at `AI_IMGSZ=640`.
 
 ## Counting Geometry Rules
 
 Traffic counting now uses these production-oriented rules:
 
-1. Detection and tracking run in full-frame coordinates.
+1. Detection and tracking run in processing-frame coordinates: crop-local when `ROI_MODE=crop_rect`, otherwise full-frame.
 2. Each track is represented by a smoothed `bottom_center` anchor, not bbox center or bbox overlap.
-3. ROI/lane polygons are post-detection analytics filters.
+3. Detection is filtered against valid lane zones before tracking to reduce out-of-zone tracks.
 4. A lane is locked only after the anchor stays in the lane for several frames.
 5. A count event requires the anchor trajectory segment to cross the counting line.
 6. Direction is validated by dot product between recent anchor motion and the configured direction vector.
-7. Lost/predicted tracks are not counted.
+7. Tentative, lost, and out-of-zone tracks are not counted or rendered in production mode.
 
-This keeps detection stable while making ROI/lane/line/vector responsible only for counting semantics.
+Current live configs should send `geometry_space` explicitly as either `crop_local` or `source_frame` so lane polygons, counting lines, and direction vectors are normalized exactly once.
 
-## Live Debug Overlay Validation — 2026-07-14
+## Historical Live Debug Overlay Validation — 2026-07-14
 
-Runtime has been rebuilt with the live debug overlay active:
+Runtime was rebuilt with the live debug overlay active:
 
 - `AI_MODEL_PATH=models/yolo11m.pt`
 - `ROI_MODE=full_frame`
@@ -157,7 +170,7 @@ Live smoke result on `https://youtu.be/1EamsYw_Xyo` for 30 seconds:
 - Count in sampled interval: `lane_volume_total=0`.
 - Frame output saved during validation: `scratch/live_vietnam_model_frame.jpg`.
 
-Important operating note: in live mode, `frames_dropped` is not automatically a failure. It means the pipeline is intentionally discarding stale source frames while GPU inference is busy, so the visual output stays close to realtime instead of building a delayed backlog.
+Historical operating note: in the old live mode, `frames_dropped` was not automatically a failure. It meant the pipeline intentionally discarded stale source frames while GPU inference was busy. In the stable 15 FPS HLS baseline, `frames_dropped=0` is expected when pacing, inference, and scheduling are healthy.
 
 ## Live HLS Stable Baseline -- 2026-07-15
 
