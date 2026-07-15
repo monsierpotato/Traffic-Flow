@@ -30,11 +30,11 @@ The live session loop is intentionally non-blocking. It reads frames continuousl
 
 Use these commands while a live session is running:
 
-`powershell
+~~~powershell
 docker compose logs --tail=200 api | Select-String -Pattern 'live/sessions|Live source opened|Live inference ready|Live session tick|Live session failed'
 curl http://localhost:8000/live/sessions
 nvidia-smi
-` 
+~~~
 
 - `stage` / `stage_detail`: user-facing batch progress phase.
 - `frames_processed`: frames actually inferred.
