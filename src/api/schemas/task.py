@@ -15,6 +15,8 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     progress: int
+    stage: Optional[str] = None
+    stage_detail: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     error_message: Optional[str] = None
@@ -28,9 +30,15 @@ class VehicleCountDetail(BaseModel):
 class TaskProgressCallback(BaseModel):
     status: str = Field(..., description="'processing' or 'completed' or 'failed'")
     progress: int = Field(..., description="0-100 progress percentage")
+    stage: Optional[str] = None
+    stage_detail: Optional[str] = None
     result_video_url: Optional[str] = None
     events_url: Optional[str] = None
     statistics: Optional[List[VehicleCountDetail]] = None
+    lane_volume_total: Optional[int] = None
+    global_unique_count: Optional[int] = None
+    multi_lane_track_count: Optional[int] = None
+    multi_lane_tracks: List[Dict[str, Any]] = Field(default_factory=list)
     error_message: Optional[str] = None
 
 class LaneStatistics(BaseModel):
@@ -46,5 +54,9 @@ class TaskResultResponse(BaseModel):
     events_url: Optional[str] = None
     statistics: List[LaneStatistics]
     total_vehicles: int
+    lane_volume_total: int = 0
+    global_unique_count: int = 0
+    multi_lane_track_count: int = 0
+    multi_lane_tracks: List[Dict[str, Any]] = Field(default_factory=list)
     processing_time_seconds: Optional[float] = None
     lane_config: Optional[LaneConfigRequest] = None

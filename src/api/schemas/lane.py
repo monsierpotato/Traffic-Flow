@@ -5,7 +5,7 @@ class Resolution(BaseModel):
     width: int
     height: int
 
-class AnnotationROI(BaseModel):
+class ProcessingROI(BaseModel):
     type: str
     x: float
     y: float
@@ -32,7 +32,8 @@ class LaneConfigRequest(BaseModel):
     camera_id: str
     resolution: Resolution
     roi_polygon: List[List[float]]
-    annotation_roi: AnnotationROI
+    processing_roi: Optional[ProcessingROI] = None
+    annotation_roi: Optional[ProcessingROI] = None
     method: str = "counting_gate"
     settings: Settings
     lanes: List[AdvancedLane]
