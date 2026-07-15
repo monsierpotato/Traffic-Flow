@@ -152,7 +152,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             track_buffer=settings.TRACK_BUFFER,
         )
         counter = CountingState(lanes)
-        renderer = FrameRenderer(lanes)
+        renderer = FrameRenderer(lanes, settings_obj=settings)
 
         # Stabilisation reference frame
         if settings.AI_ENABLE_STABILIZATION:
