@@ -192,9 +192,10 @@ class FfmpegLatestFrameReader:
                 return
             if self._proc.poll() is not None:
                 break
-        err = self._read_stderr_tail()
         self.release()
-        raise RuntimeError(f"Could not read first frame with FFmpeg. {err}".strip())
+        raise RuntimeError(
+            f"Could not read first frame with FFmpeg for {self.source_url} (stderr suppressed)."
+        )
 
     def read(self, timeout: float = 1.0):
         ok, item = self.read_item(timeout=timeout)
