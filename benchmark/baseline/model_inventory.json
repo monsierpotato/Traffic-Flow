@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-07-17",
+  "run_id": "phase-00-repository-audit-2026-07-17",
+  "git_commit": "1029440fc802fc6d39b70e016a00bf419331d475",
+  "models": [
+    {
+      "path": "models/vietnamese_vehicle_detection/my_finetuned_yolov8.pt",
+      "name": "my_finetuned_yolov8.pt",
+      "size_bytes": 6149989,
+      "last_write_time": "2025-12-09T10:06:22.0000000+07:00",
+      "sha256": "9DDFE0E53EFFFC1FC6F5F89D0243B6465824D47BE6F00F620D7A3FC6B6299B6D"
+    },
+    {
+      "path": "models/yolo11m.pt",
+      "name": "yolo11m.pt",
+      "size_bytes": 40684120,
+      "last_write_time": "2026-07-14T06:04:55.9919692+07:00",
+      "sha256": "D5FFC1A674953A08E11A8D21E022781B1B23A19B730AFC309290BD9FB5305B95"
+    },
+    {
+      "path": "models/yolov8m.pt",
+      "name": "yolov8m.pt",
+      "size_bytes": 52136884,
+      "last_write_time": "2026-07-13T23:18:10.1874017+07:00",
+      "sha256": "5D4A90CDC7A21786CC59CD19778E9EAFFF836DF9E2DA32524737C7EE6EFE4FE5"
+    },
+    {
+      "path": "models/yolov8n.pt",
+      "name": "yolov8n.pt",
+      "size_bytes": 6549796,
+      "last_write_time": "2026-05-30T22:30:30.7513223+07:00",
+      "sha256": "F59B3D833E2FF32E194B5BB8E08D211DC7C5BDF144B90D2C8412C47CCFC83B36"
+    },
+    {
+      "path": "models/yolov8s.pt",
+      "name": "yolov8s.pt",
+      "size_bytes": 22588772,
+      "last_write_time": "2026-05-30T22:32:06.9034862+07:00",
+      "sha256": "1F47A78BF100391C2A140B7AC73A1CAAE18C32779BE7D310658112F7AC9AA78A"
+    }
+  ],
+  "notes": [
+    "models/yolo11m.pt is the current Docker/README stable live baseline model.",
+    "Phase 00 records inventory only; no accuracy or runtime claim is derived from these files."
+  ]
+}
+

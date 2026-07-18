@@ -1,0 +1,13 @@
+schema_version: 1
+run_config_name: yolo11m_640
+model_path: models/yolo11m.pt
+imgsz: 640
+confidence: 0.4
+iou: 0.45
+half: true
+device: cuda:0
+tracker_config: benchmark/configs/tracker/trafficflow-default
+counting_config: benchmark/configs/benchmark_protocol_v1.yaml
+geometry_dir: benchmark/configs/geometry
+class_ids: 2,3,5,7
+notes: Phase 03 smoke validates run manifest plumbing; model scoring starts in Phase 04.

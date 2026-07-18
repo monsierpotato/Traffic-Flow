@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "sequence_id": "MVI_40892",
+  "geometry_version": "MVI_40892-manual-v1",
+  "geometry_space": "source_frame",
+  "resolution": {
+    "width": 960,
+    "height": 540
+  },
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "manual_review_reference"
+  },
+  "processing_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "inference_processing"
+  },
+  "method": "counting_gate",
+  "settings": {
+    "anchor": "bottom_center",
+    "direction_cos_threshold": 0.35,
+    "dedup_key": "track_id_lane_id"
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "direction_name": "forward",
+      "valid_zone": [
+        [
+          584.19,
+          273.33
+        ],
+        [
+          681.05,
+          362.11
+        ],
+        [
+          828.85,
+          440.91
+        ],
+        [
+          939.69,
+          485.8
+        ],
+        [
+          946.69,
+          358.12
+        ],
+        [
+          870.79,
+          325.2
+        ],
+        [
+          802.88,
+          301.26
+        ],
+        [
+          754.95,
+          265.34
+        ],
+        [
+          733.98,
+          245.39
+        ],
+        [
+          585.19,
+          267.34
+        ]
+      ],
+      "counting_line": [
+        [
+          860.8,
+          325.2
+        ],
+        [
+          790.9,
+          419.96
+        ]
+      ],
+      "direction": [
+        [
+          755.95,
+          353.13
+        ],
+        [
+          892.76,
+          397.02
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    }
+  ]
+}

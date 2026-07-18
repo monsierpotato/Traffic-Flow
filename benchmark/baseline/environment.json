@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-07-17",
+  "run_id": "phase-00-repository-audit-2026-07-17",
+  "git_commit": "1029440fc802fc6d39b70e016a00bf419331d475",
+  "host": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "shell": "PowerShell",
+    "default_python_executable": "C:\\Users\\ADMIN\\anaconda3\\python.exe",
+    "default_python": "3.13.9",
+    "ffmpeg_in_path": false,
+    "ffprobe_in_path": false
+  },
+  "project_venv": {
+    "python_executable": "C:\\Users\\ADMIN\\OneDrive\\Documents\\_Project\\TrafficFlow\\.venv\\Scripts\\python.exe",
+    "python": "3.13.9"
+  },
+  "gpu": {
+    "nvidia_smi_available": true,
+    "name": "NVIDIA GeForce RTX 5070 Ti",
+    "driver_version": "591.74",
+    "memory_total_mib": 16303
+  },
+  "python_packages": {
+    "torch": "2.13.0+cpu",
+    "torch_cuda_available": false,
+    "torch_cuda_version": null,
+    "ultralytics": "8.4.91",
+    "opencv_python": "4.10.0",
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "lap": "0.5.13",
+    "psutil": "7.2.2",
+    "fastapi": "0.139.0"
+  },
+  "docker_validation": {
+    "docker_compose_config": "PASS",
+    "note": "Config rendered successfully. Secret values were not copied into this environment snapshot."
+  },
+  "limitations": [
+    "The project .venv snapshot is CPU-only and not the Docker GPU runtime.",
+    "Default PowerShell python points to Anaconda and does not have FastAPI installed; validation uses the project .venv interpreter.",
+    "Formal benchmark phases must capture environment metadata from the actual run container/process."
+  ]
+}

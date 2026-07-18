@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "sequence_id": "MVI_20035",
+  "geometry_version": "MVI_20035-manual-v1",
+  "geometry_space": "source_frame",
+  "resolution": {
+    "width": 960,
+    "height": 540
+  },
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "manual_review_reference"
+  },
+  "processing_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "inference_processing"
+  },
+  "method": "counting_gate",
+  "settings": {
+    "anchor": "bottom_center",
+    "direction_cos_threshold": 0.35,
+    "dedup_key": "track_id_lane_id"
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "direction_name": "forward",
+      "valid_zone": [
+        [
+          204.72,
+          229.43
+        ],
+        [
+          13.98,
+          395.02
+        ],
+        [
+          535.26,
+          395.02
+        ],
+        [
+          531.26,
+          215.47
+        ],
+        [
+          201.72,
+          223.45
+        ],
+        [
+          204.72,
+          229.43
+        ]
+      ],
+      "counting_line": [
+        [
+          67.91,
+          340.16
+        ],
+        [
+          533.26,
+          332.18
+        ]
+      ],
+      "direction": [
+        [
+          357.5,
+          249.38
+        ],
+        [
+          317.56,
+          350.14
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    },
+    {
+      "lane_id": "lane_2",
+      "direction_name": "forward",
+      "valid_zone": [
+        [
+          553.23,
+          195.52
+        ],
+        [
+          566.21,
+          358.12
+        ],
+        [
+          958.67,
+          309.24
+        ],
+        [
+          958.67,
+          227.44
+        ],
+        [
+          869.79,
+          176.56
+        ],
+        [
+          545.24,
+          186.54
+        ],
+        [
+          553.23,
+          195.52
+        ]
+      ],
+      "counting_line": [
+        [
+          550.24,
+          209.48
+        ],
+        [
+          898.75,
+          193.52
+        ]
+      ],
+      "direction": [
+        [
+          774.92,
+          244.4
+        ],
+        [
+          730.98,
+          183.55
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    }
+  ]
+}

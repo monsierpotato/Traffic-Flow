@@ -1,243 +1,234 @@
 # TrafficFlow
 
-TrafficFlow is a vehicle-counting system for uploaded videos and live traffic streams. It combines FastAPI, Celery, Redis, local GPU inference, YOLO, Kalman tracking, lane geometry, and a React frontend into one workflow for traffic monitoring.
+Hệ thống phân tích giao thông bằng video: phát hiện, theo dõi và đếm xe theo từng làn đường. Người dùng upload video giao thông hoặc kết nối luồng trực tiếp (YouTube/HLS), vẽ vùng giám sát — hệ thống tự động trả về video có overlay và bảng thống kê số lượng xe theo làn, loại xe và hướng di chuyển.
 
-The current stable live baseline is YouTube/HLS streaming at 15 FPS with `models/yolo11m.pt`, ROI cropping, realtime FFmpeg pacing, and low-latency latest-frame scheduling.
+Dự án nhóm 5 thành viên, triển khai qua Docker với GPU local.
 
-## What This Project Does
+---
 
-- Upload a video, configure ROI/lane/counting lines, and process it through a Celery worker.
-- Resolve YouTube/HLS/RTSP/MJPEG/direct video sources, annotate a preview frame, and run live counting.
-- Render annotated output with lanes, counting lines, tracked vehicles, and live metrics.
-- Persist task metadata in MongoDB Atlas when available, with local JSON fallback for development.
-- Store video artifacts through Cloudflare R2 in production-style flows.
+## Kiến trúc hệ thống
 
-## Runtime Shape
+![System Architecture](images/System_Architecture.png)
+
+```
+Người dùng / Frontend
+  → FastAPI API
+    → MongoDB (lưu task, config, kết quả)
+    → Redis / Celery (hàng đợi xử lý)
+      → Worker (tải video, gọi AI engine)
+        → Local GPU Inference (YOLO + ByteTrack + Counting)
+          → Cloudflare R2 (lưu video kết quả)
+            → Trả kết quả về Frontend
+```
+
+---
+
+## Tính năng chính
+
+- **Upload video** giao thông (hỗ trợ chunked upload cho file lớn, tự động chuẩn hóa 1080p)
+- **Live streaming** từ YouTube, HLS, RTSP hoặc MJPEG — phân tích thời gian thực
+- **Vẽ trực quan** vùng giám sát (ROI), làn đường, đường đếm và hướng xe ngay trên giao diện web
+- **AI Pipeline**: YOLO phát hiện xe → ByteTrack theo dõi → Lọc theo làn → Đếm xe qua vạch
+- **Dashboard** thống kê: số lượng xe theo làn, loại xe (car, bus, truck, motorcycle) và hướng
+- **GPU acceleration** local qua Docker — không phụ thuộc cloud GPU
+
+---
+
+## Workflow — Xử lý video upload
+
+![Batch Processing Workflow](images/batch_video_processing_workflow.png)
 
 ```text
-Frontend
-  -> FastAPI api
-       -> upload/batch task -> Redis -> Celery worker -> result artifacts
-       -> live session      -> FFmpeg reader -> local YOLO -> tracker -> MJPEG/status
+Upload video → Trích xuất frame preview
+  → Người dùng vẽ ROI + làn đường + đường đếm + hướng
+    → Lưu lane config → Submit task
+      → Hàng đợi Celery → Worker tải video
+        → Xử lý từng frame: Detect → Track → Count → Render
+          → Upload kết quả lên R2
+            → Frontend poll kết quả: video overlay + bảng thống kê
 ```
 
-Important runtime split:
+Xử lý bất đồng bộ (async), queue-based — người dùng không phải chờ. Kết quả trả về gồm video đã gắn overlay và bảng thống kê chi tiết theo từng làn.
 
-- Uploaded videos are processed by the Celery `worker`.
-- Live YouTube/HLS inference runs inside the FastAPI `api` process.
-- Both `api` and `worker` need NVIDIA runtime access when using local GPU inference.
+---
 
-## Repository Layout
+## Workflow — Live streaming
+
+![Live Streaming Workflow](images/live_streaming_workflow.png)
 
 ```text
-TrafficFlow/
-├── src/
-│   ├── api/          # FastAPI app, routes, live sessions, upload/task APIs
-│   ├── shared/       # Shared config, database, storage clients
-│   ├── worker/       # Celery worker and counting pipeline
-│   └── tfengine/     # Reusable AI/counting/geometry engine
-├── frontend/         # React + Vite UI
-├── configs/          # Lane/ROI configuration examples
-├── docs/             # User docs, contracts, and development wiki
-├── models/           # Model weights, not committed
-├── tests/            # Unit/integration tests
-├── docker-compose.yml
-└── Dockerfile
+YouTube / HLS / RTSP source
+  → Phân giải nguồn (resolve source) → Chụp preview snapshot
+    → Người dùng vẽ ROI + lanes → Validate config
+      → Khởi động live session
+        → FFmpeg latest-frame ingest (chỉ lấy frame mới nhất)
+          → GPU inference → Tracking → Counting
+            → Xuất MJPEG / live frame → Dashboard metrics real-time
 ```
 
-## Requirements
+Live path khác biệt so với batch path: sử dụng chiến lược latest-frame (bỏ frame cũ, luôn xử lý frame mới nhất), timestamp-aware tracking, và near-zero frame age.
 
-| Component | Recommended | Notes |
-| --- | --- | --- |
-| Docker Desktop | Recent version | Easiest path for API, worker, Redis, frontend build |
-| NVIDIA driver + container toolkit | Required for local GPU | Needed by both `api` and `worker` services |
-| Python | 3.10+ local, 3.12 in Docker | Local scripts/tests only |
-| Node.js | 18+ | Frontend build and YouTube JS challenge support |
-| Redis | Docker service by default | Celery broker |
-| MongoDB Atlas | Optional for local dev | Local JSON fallback is available |
-| FFmpeg/ffprobe | Included in Docker | Required for live HLS ingest |
+---
 
-Model weights are expected under `models/`. The stable live setup uses:
+## AI Pipeline
+
+![AI Core Pipeline](images/ai_core_pipeline.png)
 
 ```text
-models/yolo11m.pt
+Input frame
+  → ROI crop + coordinate transform (chuẩn hóa về crop-local)
+  → YOLO detection (phát hiện xe: car, bus, truck, motorcycle)
+  → Detection filtering (lọc theo class + confidence)
+  → ByteTrack tracking (giữ identity xe qua các frame)
+  → Lane assignment (gán xe vào làn dựa trên valid zone)
+  → Direction validation (kiểm tra hướng xe so với direction vector)
+  → Line crossing detection (phát hiện xe cắt counting line)
+  → Event generation (mỗi lần cắt là một counting event)
+  → Count aggregation (tổng hợp theo lane + class + direction)
+  → Overlay rendering (vẽ bbox, track ID, lane, đếm lên frame)
 ```
 
-## Docker GPU Quick Start
+**Điểm kỹ thuật chính:**
 
-From the project root:
+- **Bottom-center anchor**: dùng điểm giữa cạnh dưới của bbox (thay vì tâm) để kiểm tra vị trí xe — gần điểm tiếp xúc mặt đường hơn
+- **Lane lock**: mỗi xe chỉ thuộc một làn tại một thời điểm, tránh đếm trùng
+- **Direction-aware counting**: chỉ đếm xe đi đúng hướng, bỏ qua xe đi ngược chiều
+- **Event semantics**: mỗi counting event có video_id, lane_id, class, direction, crossing_frame, crossing_time
 
-```bash
-docker compose up -d --build --force-recreate
-docker compose logs -f api
-```
+Chi tiết đầy đủ: [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md)
 
-Open the app:
+---
+
+## Benchmark & Evaluation
+
+![Benchmark Workflow](images/benchmark_and_evaluation.png)
+
+Quy trình benchmark được thiết kế theo hướng evidence-driven:
 
 ```text
-http://localhost:8000
+Audit repository → Freeze baseline → Freeze dataset split (theo sequence, không theo frame)
+  → Manual geometry → Derived ground truth (audit thủ công)
+    → Unified benchmark runner
+      → Detection benchmark (chọn model)
+      → Tracking benchmark (chọn tracker)
+      → Counting benchmark (đo end-to-end)
+        → Production decision (chọn pipeline tối ưu)
 ```
 
-Check live sessions:
+**Nguyên tắc benchmark:**
+
+- Tập test (held-out) được freeze trước khi tuning — không dùng test để chọn model
+- Split theo sequence hoàn chỉnh, cấm split ngẫu nhiên theo frame
+- Mọi metric có run ID, config snapshot và raw prediction để tái lập
+
+### Kết quả chính
+
+*Benchmark trên tập UA-DETRAC held-out, GPU RTX 5070 Ti*
+
+| Hạng mục                     |                   Chỉ số | Kết quả              |
+| ------------------------------ | -------------------------: | ---------------------- |
+| Phát hiện xe                 |              AP50 / Recall | 0.582 / 0.679          |
+| Theo dõi xe                   |    HOTA / IDF1 / ID Switch | 0.242 / 0.285 / 42     |
+| Đếm xe (event-level)         |            Event F1 / WAPE | 0.942 / 5.04%          |
+| Tốc độ xử lý video upload |     FPS / Real-time factor | 75.8 FPS / 3.03×      |
+| Live stream (30 phút soak)    | FPS / Frame age p95 / Drop | 14.9 FPS / 0.9 ms / 0% |
+
+Chi tiết từng phase: [docs/reports/](docs/reports/)
+
+---
+
+## Timeline — Problem → Solution
+
+![Decision Timeline](images/Decision_and_Improvement.png)
+
+Hành trình phát triển qua các phase chính:
+
+```text
+Initial system (cơ bản)
+  → ROI inconsistency issue (sai coordinate space)
+    → Fix: coordinate normalization + geometry_space contract
+      → Detection benchmark (chọn model YOLOv8m)
+        → Tracking ablation (so sánh direct ByteTrack vs production re-tracker)
+          → Counting validation (derived GT + audit)
+            → End-to-end comparison
+              → Quyết định: Direct ByteTrack mạnh hơn production re-tracker
+                → Live runtime optimization (latest-frame scheduling)
+                  → 30-min soak test → Stable 15 FPS
+```
+
+---
+
+## Đội ngũ & Vai trò
+
+| Thành viên | Vai trò                   | Phụ trách chính                                                                                  |
+| ------------ | -------------------------- | --------------------------------------------------------------------------------------------------- |
+| Quang Nhật  | AI Pipeline Engineer       | Runtime engine, YOLO/ByteTrack inference, lane geometry, tracking, counting, benchmark & evaluation |
+| Công Phúc  | Frontend Engineer          | Upload UI, canvas lane drawing, coordinate scaling, progress/result dashboard                       |
+| Thái Hưng  | Backend Engineer           | FastAPI, database schema, upload/preview API, task/result APIs, data retention, file validation     |
+| Minh Tiến   | DevOps / Worker Engineer   | Celery/Redis, worker, Docker, compose, GPU allocation, environment configuration                    |
+| Tuấn Hưng  | Integration / QA / Release | End-to-end QA, coordinate alignment, queue stress testing, release checklist                        |
+
+---
+
+## Công nghệ sử dụng
+
+| Tầng    | Công nghệ                                                |
+| -------- | ---------------------------------------------------------- |
+| AI / CV  | YOLOv8, YOLO11, ByteTrack, OpenCV 4.10, PyTorch, CUDA 12.4 |
+| Backend  | FastAPI, Celery, Redis, MongoDB Atlas                      |
+| Frontend | React (Vite), HTML5 Canvas                                 |
+| Storage  | Cloudflare R2                                              |
+| DevOps   | Docker, Docker Compose, NVIDIA Container Toolkit           |
+
+---
+
+## Quick Start
 
 ```bash
-curl http://localhost:8000/live/sessions
+cd TrafficFlow
+docker compose build
+docker compose up -d
 ```
 
-Check GPU visibility:
+Mở trình duyệt: **http://localhost:8000**
 
-```bash
-docker compose exec api nvidia-smi
-docker compose exec worker nvidia-smi
-```
+3 containers: `api` (FastAPI + React), `worker` (YOLO GPU), `redis` (broker).
 
-If you only changed API/live code and do not want to restart the upload worker:
+Yêu cầu: Docker, Docker Compose, NVIDIA GPU + Container Toolkit (khuyến nghị RTX 3060+).
 
-```bash
-docker compose up -d --build --force-recreate api
-```
+Hướng dẫn chi tiết (cấu hình `.env`, API endpoints, xử lý lỗi): **[docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md)**
 
-## Stable Live Baseline
+---
 
-Keep these values when you want the known-good YouTube/HLS 15 FPS setup:
+## Tài liệu
 
-```env
-AI_MODEL_PATH=models/yolo11m.pt
-AI_CLASS_IDS=2,3,5,7
-AI_IMGSZ=640
-AI_CONFIDENCE=0.4
-AI_IOU=0.45
-AI_MAX_DET=100
-AI_FRAME_SKIP=1
+| Tài liệu                                            | Nội dung                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------ |
+| [docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md) | Hướng dẫn triển khai & sử dụng chi tiết                           |
+| [docs/portfolio/](docs/portfolio/)                     | AI pipeline, benchmark methodology, error analysis, CV package           |
+| [docs/reports/](docs/reports/)                         | Báo cáo benchmark từng phase (detection, tracking, counting, runtime) |
+| [docs/wiki/](docs/wiki/)                               | Wiki nội bộ: kiến trúc, quyết định kỹ thuật, sprint backlog     |
+| [docs/contracts/](docs/contracts/)                     | API contracts: lane config, progress callback, kết quả                 |
+| [benchmark/](benchmark/)                               | Bộ benchmark có thể tái lập: configs, splits, predictions, reports  |
 
-ROI_MODE=crop_rect
-OUTPUT_FRAME_MODE=roi
+---
 
-LIVE_FFMPEG_OUTPUT_FPS=15
-LIVE_FFMPEG_REALTIME_PACING=true
-LIVE_FRAME_QUEUE_SIZE=1
-LIVE_MAX_FRAME_AGE_SECONDS=0.25
+## Hạn chế & Hướng phát triển
 
-LIVE_TRACK_MIN_HITS=3
-LIVE_TRACK_MAX_LOST_SECONDS=0.7
-LIVE_TRACK_RESET_GAP_SECONDS=1.0
+**Hiện tại:**
 
-TRACK_BUFFER=8
-TRACK_MATCH_THRESHOLD=0.3
-TRACK_FILTER_ZONE_PADDING_PX=12
-RENDER_DEBUG=false
-RENDER_SHOW_LOST=false
-RENDER_SHOW_OUT_OF_ZONE=false
-```
+- Detection benchmark là sampled (frame-stride 100), chưa exhaustive toàn bộ frame
+- ROI crop accuracy chưa được benchmark định lượng (thiếu ground truth crop)
+- Live stream: chỉ đo được stability, chưa có GT để đo counting accuracy
+- Dataset UA-DETRAC không có motorcycle label → không claim motorcycle accuracy
+- Model weights, benchmark data, credentials không được commit lên repo
 
-Validated result for this baseline:
+**Hướng tiếp theo:**
 
-- `fps`: about `14.97-15.05`
-- `frame_interarrival_ms`: about `66.7`
-- `frame_age_ms`: about `0.7-1.3`
-- `frames_dropped`: `0`
-- `infer_wall_ms`: usually `9-18`
-- `lost_tracks`: `0`
-- `last_error`: `null`
+- Gán nhãn thủ công video thực tế để đo counting accuracy trên live source
+- Tự động phát hiện làn đường thay vì vẽ thủ công
+- Hỗ trợ nhiều camera cùng lúc
 
-Avoid reverting this baseline to older debug settings such as:
+---
 
-```env
-AI_IMGSZ=960
-ROI_MODE=full_frame
-```
-
-Those settings were useful during model experiments, but they are not the stable live configuration.
-
-## YouTube/HLS Live Workflow
-
-1. Open the frontend at `http://localhost:8000`.
-2. Enter a YouTube live URL, HLS URL, RTSP URL, MJPEG URL, or direct video URL.
-3. Resolve the source and capture a preview frame.
-4. Draw/select the processing ROI, lane polygons, counting lines, and direction vectors.
-5. Start the live session.
-6. Monitor `/live/sessions` for FPS, frame age, inference wall time, tracks, and errors.
-
-For YouTube sources, Docker mounts browser cookies into the API container:
-
-```yaml
-C:/Users/ADMIN/Downloads/cookies.txt:/run/secrets/youtube_cookies.txt:ro
-```
-
-The resolver uses `yt-dlp`, Node.js, and remote JS components for YouTube challenge handling.
-
-## Uploaded Video Workflow
-
-1. Upload a video through the frontend.
-2. Configure ROI/lane geometry.
-3. Submit processing.
-4. The API enqueues a Celery task into Redis.
-5. The worker runs frame processing, detection, tracking, counting, rendering, and artifact upload.
-6. The frontend polls task status and shows the result.
-
-## Local Development
-
-Create a virtual environment:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[api,worker,gpu,dev]"
-```
-
-Run the API locally:
-
-```powershell
-$env:PYTHONPATH="src"
-python -m uvicorn api.app:create_app --factory --host 0.0.0.0 --port 8000
-```
-
-Run a worker locally:
-
-```powershell
-$env:PYTHONPATH="src"
-celery -A worker.celery_app worker --loglevel info --concurrency 1
-```
-
-Run tests:
-
-```powershell
-python -m pytest tests -q
-```
-
-## Useful Commands
-
-Inspect active live sessions:
-
-```bash
-curl http://localhost:8000/live/sessions
-```
-
-Follow live-related API logs:
-
-```powershell
-docker compose logs --tail=200 api | Select-String -Pattern "Live source opened|Live inference ready|Live session tick|Live session failed"
-```
-
-Verify current API environment:
-
-```bash
-docker compose exec api sh -lc "env | sort | grep -E 'AI_MODEL_PATH|AI_IMGSZ|ROI_MODE|LIVE_FFMPEG|LIVE_TRACK|RENDER_DEBUG|TRACK_'"
-```
-
-## Troubleshooting
-
-- Live FPS is around 15 and `loop_idle_ms` is high: this is expected when `LIVE_FFMPEG_OUTPUT_FPS=15`; the loop is waiting for the next paced frame.
-- `frame_age_ms` grows above 250 ms: the live loop is accumulating latency; check FFmpeg pacing and stale-frame dropping.
-- `infer_wall_ms` jumps to hundreds of milliseconds: check CUDA contention, model warmup, or another process using the GPU.
-- First live inference is slow: model warmup may still be needed before marking a session as running.
-- MongoDB Atlas SSL/TLS fails locally: the API can fall back to `storage/local_db.json` when fallback is enabled.
-- Geometry warning about `geometry_space`: frontend should send `geometry_space: "crop_local"` for crop-local ROI/lane configs.
-
-## Documentation
-
-- `docs/HUONG_DAN_SU_DUNG.md` - user guide
-- `docs/API_INTEGRATION.md` - API integration notes
-- `docs/contracts/` - request/response and config contracts
-- `docs/wiki/` - architecture, decision log, runtime notes, and live optimization history
-- `docs/wiki/ai-workflow/gpu-docker-live-optimization.md` - live GPU/HLS optimization baseline
+*TrafficFlow — dự án nhóm 5 thành viên, 2026*

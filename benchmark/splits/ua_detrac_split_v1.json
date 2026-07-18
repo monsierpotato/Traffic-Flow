@@ -1,0 +1,720 @@
+{
+  "schema_version": 1,
+  "split_version": "ua_detrac_split_v1",
+  "created_date": "2026-07-17",
+  "dataset": "UA-DETRAC local extract",
+  "inventory_file": "benchmark/splits/ua_detrac_inventory_v1.json",
+  "split_unit": "full_sequence",
+  "random_frame_split": "forbidden",
+  "nominal_fps_for_image_sequence_conversion": 25,
+  "fps_policy": "XML FPS is unavailable; generated videos must use nominal_fps=25 unless a source video provides actual FPS, and run manifests must record actual FPS.",
+  "selection_policy": "v1 uses a fixed subset stratified by official split, camera_state, weather, and mapped class diversity; all other sequences are reserve_only and cannot be used for v1 tuning or held-out scoring without a protocol bump.",
+  "anti_leakage_rules": [
+    "No frame-level random split is allowed.",
+    "A sequence_id can appear in exactly one split bucket.",
+    "held_out_test must not be used to tune model, thresholds, tracker, counting rules, or geometry.",
+    "Per-sequence geometry must be frozen before scoring predictions for that sequence.",
+    "Any movement from reserve_only into development or held_out_test requires split_version bump and report update."
+  ],
+  "splits": {
+    "smoke_test": [
+      "MVI_20011"
+    ],
+    "development": [
+      "MVI_20012",
+      "MVI_20035",
+      "MVI_40241",
+      "MVI_40213",
+      "MVI_40752",
+      "MVI_40963",
+      "MVI_63553",
+      "MVI_41063"
+    ],
+    "held_out_test": [
+      "MVI_40892",
+      "MVI_39401",
+      "MVI_40793",
+      "MVI_40854",
+      "MVI_40761"
+    ],
+    "reserve_only": [
+      "MVI_20032",
+      "MVI_20033",
+      "MVI_20034",
+      "MVI_20051",
+      "MVI_20052",
+      "MVI_20061",
+      "MVI_20062",
+      "MVI_20063",
+      "MVI_20064",
+      "MVI_20065",
+      "MVI_39031",
+      "MVI_39051",
+      "MVI_39211",
+      "MVI_39271",
+      "MVI_39311",
+      "MVI_39361",
+      "MVI_39371",
+      "MVI_39501",
+      "MVI_39511",
+      "MVI_39761",
+      "MVI_39771",
+      "MVI_39781",
+      "MVI_39801",
+      "MVI_39811",
+      "MVI_39821",
+      "MVI_39851",
+      "MVI_39861",
+      "MVI_39931",
+      "MVI_40131",
+      "MVI_40141",
+      "MVI_40152",
+      "MVI_40161",
+      "MVI_40162",
+      "MVI_40171",
+      "MVI_40172",
+      "MVI_40181",
+      "MVI_40191",
+      "MVI_40192",
+      "MVI_40201",
+      "MVI_40204",
+      "MVI_40211",
+      "MVI_40212",
+      "MVI_40243",
+      "MVI_40244",
+      "MVI_40701",
+      "MVI_40711",
+      "MVI_40712",
+      "MVI_40714",
+      "MVI_40732",
+      "MVI_40742",
+      "MVI_40743",
+      "MVI_40751",
+      "MVI_40762",
+      "MVI_40763",
+      "MVI_40771",
+      "MVI_40772",
+      "MVI_40773",
+      "MVI_40774",
+      "MVI_40775",
+      "MVI_40792",
+      "MVI_40851",
+      "MVI_40852",
+      "MVI_40853",
+      "MVI_40855",
+      "MVI_40863",
+      "MVI_40864",
+      "MVI_40871",
+      "MVI_40891",
+      "MVI_40901",
+      "MVI_40902",
+      "MVI_40903",
+      "MVI_40904",
+      "MVI_40905",
+      "MVI_40962",
+      "MVI_40981",
+      "MVI_40991",
+      "MVI_40992",
+      "MVI_41073",
+      "MVI_63521",
+      "MVI_63525",
+      "MVI_63544",
+      "MVI_63552",
+      "MVI_63554",
+      "MVI_63561",
+      "MVI_63562",
+      "MVI_63563"
+    ]
+  },
+  "split_summaries": {
+    "smoke_test": {
+      "sequence_count": 1,
+      "frame_count_xml": 664,
+      "gt_track_count_mapped": 52,
+      "mapped_class_distribution_tracks": {
+        "bus": 1,
+        "car": 49,
+        "truck": 2
+      },
+      "weather_distribution": {
+        "sunny": 1
+      },
+      "camera_state_distribution": {
+        "unstable": 1
+      },
+      "official_split_distribution": {
+        "official_train": 1
+      }
+    },
+    "development": {
+      "sequence_count": 8,
+      "frame_count_xml": 12593,
+      "gt_track_count_mapped": 1357,
+      "mapped_class_distribution_tracks": {
+        "bus": 19,
+        "car": 1184,
+        "truck": 154
+      },
+      "weather_distribution": {
+        "cloudy": 2,
+        "night": 2,
+        "rainy": 1,
+        "sunny": 3
+      },
+      "camera_state_distribution": {
+        "stable": 4,
+        "unstable": 4
+      },
+      "official_split_distribution": {
+        "official_train": 8
+      }
+    },
+    "held_out_test": {
+      "sequence_count": 5,
+      "frame_count_xml": 8359,
+      "gt_track_count_mapped": 509,
+      "mapped_class_distribution_tracks": {
+        "bus": 54,
+        "car": 431,
+        "truck": 24
+      },
+      "weather_distribution": {
+        "cloudy": 1,
+        "night": 2,
+        "rainy": 1,
+        "sunny": 1
+      },
+      "camera_state_distribution": {
+        "stable": 3,
+        "unstable": 2
+      },
+      "official_split_distribution": {
+        "official_test": 5
+      }
+    },
+    "reserve_only": {
+      "sequence_count": 86,
+      "frame_count_xml": 116636,
+      "gt_track_count_mapped": 6297,
+      "mapped_class_distribution_tracks": {
+        "bus": 237,
+        "car": 5503,
+        "truck": 557
+      },
+      "weather_distribution": {
+        "cloudy": 27,
+        "night": 24,
+        "rainy": 17,
+        "sunny": 18
+      },
+      "camera_state_distribution": {
+        "stable": 46,
+        "unstable": 40
+      },
+      "official_split_distribution": {
+        "official_test": 35,
+        "official_train": 51
+      }
+    }
+  },
+  "selected_sequence_metadata": {
+    "MVI_20011": {
+      "sequence_id": "MVI_20011",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_20011.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_20011",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 664,
+      "frame_num_min": 1,
+      "frame_num_max": 664,
+      "image_frame_count": 664,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 53,
+      "gt_track_count_mapped": 52,
+      "raw_class_distribution_tracks": {
+        "bus": 1,
+        "car": 49,
+        "others": 1,
+        "van": 2
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 1,
+        "car": 49,
+        "truck": 2
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 1
+      },
+      "frame_target_annotations": 7655,
+      "camera_state": "unstable",
+      "weather": "sunny"
+    },
+    "MVI_20012": {
+      "sequence_id": "MVI_20012",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_20012.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_20012",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 936,
+      "frame_num_min": 1,
+      "frame_num_max": 936,
+      "image_frame_count": 936,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 41,
+      "gt_track_count_mapped": 41,
+      "raw_class_distribution_tracks": {
+        "bus": 2,
+        "car": 35,
+        "van": 4
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 2,
+        "car": 35,
+        "truck": 4
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 8608,
+      "camera_state": "unstable",
+      "weather": "sunny"
+    },
+    "MVI_20035": {
+      "sequence_id": "MVI_20035",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_20035.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_20035",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 800,
+      "frame_num_min": 1,
+      "frame_num_max": 800,
+      "image_frame_count": 800,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 65,
+      "gt_track_count_mapped": 65,
+      "raw_class_distribution_tracks": {
+        "car": 58,
+        "van": 7
+      },
+      "mapped_class_distribution_tracks": {
+        "car": 58,
+        "truck": 7
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 11855,
+      "camera_state": "unstable",
+      "weather": "sunny"
+    },
+    "MVI_40241": {
+      "sequence_id": "MVI_40241",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_40241.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40241",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 2320,
+      "frame_num_min": 1,
+      "frame_num_max": 2320,
+      "image_frame_count": 2320,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 338,
+      "gt_track_count_mapped": 335,
+      "raw_class_distribution_tracks": {
+        "bus": 1,
+        "car": 294,
+        "others": 3,
+        "van": 40
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 1,
+        "car": 294,
+        "truck": 40
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 3
+      },
+      "frame_target_annotations": 21347,
+      "camera_state": "stable",
+      "weather": "cloudy"
+    },
+    "MVI_40213": {
+      "sequence_id": "MVI_40213",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_40213.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40213",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1782,
+      "frame_num_min": 1,
+      "frame_num_max": 1790,
+      "image_frame_count": 1790,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 231,
+      "gt_track_count_mapped": 228,
+      "raw_class_distribution_tracks": {
+        "bus": 3,
+        "car": 194,
+        "others": 3,
+        "van": 31
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 3,
+        "car": 194,
+        "truck": 31
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 3
+      },
+      "frame_target_annotations": 7702,
+      "camera_state": "unstable",
+      "weather": "cloudy"
+    },
+    "MVI_40752": {
+      "sequence_id": "MVI_40752",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_40752.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40752",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 2025,
+      "frame_num_min": 1,
+      "frame_num_max": 2025,
+      "image_frame_count": 2025,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 193,
+      "gt_track_count_mapped": 191,
+      "raw_class_distribution_tracks": {
+        "bus": 4,
+        "car": 169,
+        "others": 2,
+        "van": 18
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 4,
+        "car": 169,
+        "truck": 18
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 2
+      },
+      "frame_target_annotations": 16852,
+      "camera_state": "stable",
+      "weather": "night"
+    },
+    "MVI_40963": {
+      "sequence_id": "MVI_40963",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_40963.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40963",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1820,
+      "frame_num_min": 1,
+      "frame_num_max": 1820,
+      "image_frame_count": 1820,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 144,
+      "gt_track_count_mapped": 144,
+      "raw_class_distribution_tracks": {
+        "bus": 6,
+        "car": 126,
+        "van": 12
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 6,
+        "car": 126,
+        "truck": 12
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 11639,
+      "camera_state": "stable",
+      "weather": "night"
+    },
+    "MVI_63553": {
+      "sequence_id": "MVI_63553",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_63553.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_63553",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1405,
+      "frame_num_min": 1,
+      "frame_num_max": 1405,
+      "image_frame_count": 1405,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 190,
+      "gt_track_count_mapped": 188,
+      "raw_class_distribution_tracks": {
+        "bus": 2,
+        "car": 163,
+        "others": 2,
+        "van": 23
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 2,
+        "car": 163,
+        "truck": 23
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 2
+      },
+      "frame_target_annotations": 10775,
+      "camera_state": "unstable",
+      "weather": "rainy"
+    },
+    "MVI_41063": {
+      "sequence_id": "MVI_41063",
+      "official_split": "official_train",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_41063.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_41063",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1505,
+      "frame_num_min": 1,
+      "frame_num_max": 1505,
+      "image_frame_count": 1505,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 167,
+      "gt_track_count_mapped": 165,
+      "raw_class_distribution_tracks": {
+        "bus": 1,
+        "car": 145,
+        "others": 2,
+        "van": 19
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 1,
+        "car": 145,
+        "truck": 19
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 2
+      },
+      "frame_target_annotations": 10048,
+      "camera_state": "stable",
+      "weather": "sunny"
+    },
+    "MVI_40892": {
+      "sequence_id": "MVI_40892",
+      "official_split": "official_test",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40892.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40892",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1790,
+      "frame_num_min": 1,
+      "frame_num_max": 1790,
+      "image_frame_count": 1790,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 135,
+      "gt_track_count_mapped": 134,
+      "raw_class_distribution_tracks": {
+        "bus": 16,
+        "car": 109,
+        "others": 1,
+        "van": 9
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 16,
+        "car": 109,
+        "truck": 9
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 1
+      },
+      "frame_target_annotations": 36840,
+      "camera_state": "stable",
+      "weather": "rainy"
+    },
+    "MVI_39401": {
+      "sequence_id": "MVI_39401",
+      "official_split": "official_test",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_39401.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_39401",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1385,
+      "frame_num_min": 1,
+      "frame_num_max": 1385,
+      "image_frame_count": 1385,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 129,
+      "gt_track_count_mapped": 129,
+      "raw_class_distribution_tracks": {
+        "bus": 12,
+        "car": 113,
+        "van": 4
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 12,
+        "car": 113,
+        "truck": 4
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 14097,
+      "camera_state": "unstable",
+      "weather": "sunny"
+    },
+    "MVI_40793": {
+      "sequence_id": "MVI_40793",
+      "official_split": "official_test",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40793.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40793",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1959,
+      "frame_num_min": 1,
+      "frame_num_max": 1959,
+      "image_frame_count": 1960,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 87,
+      "gt_track_count_mapped": 87,
+      "raw_class_distribution_tracks": {
+        "bus": 9,
+        "car": 76,
+        "van": 2
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 9,
+        "car": 76,
+        "truck": 2
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 18788,
+      "camera_state": "stable",
+      "weather": "night"
+    },
+    "MVI_40854": {
+      "sequence_id": "MVI_40854",
+      "official_split": "official_test",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40854.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40854",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 1195,
+      "frame_num_min": 1,
+      "frame_num_max": 1195,
+      "image_frame_count": 1195,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 87,
+      "gt_track_count_mapped": 87,
+      "raw_class_distribution_tracks": {
+        "bus": 9,
+        "car": 73,
+        "van": 5
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 9,
+        "car": 73,
+        "truck": 5
+      },
+      "ignored_class_distribution_tracks": {},
+      "frame_target_annotations": 20099,
+      "camera_state": "stable",
+      "weather": "cloudy"
+    },
+    "MVI_40761": {
+      "sequence_id": "MVI_40761",
+      "official_split": "official_test",
+      "xml_path": "benchmark/detrac/ua-detrac-orig/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40761.xml",
+      "image_dir": "benchmark/detrac/ua-detrac-orig/DETRAC-Images/DETRAC-Images/MVI_40761",
+      "has_xml": true,
+      "has_images": true,
+      "frame_count_xml": 2030,
+      "frame_num_min": 1,
+      "frame_num_max": 2030,
+      "image_frame_count": 2030,
+      "fps": null,
+      "fps_source": "not_present_in_xml; use protocol nominal_fps=25 for image-sequence conversion and record actual video FPS at run time",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "gt_track_count_raw": 73,
+      "gt_track_count_mapped": 72,
+      "raw_class_distribution_tracks": {
+        "bus": 8,
+        "car": 60,
+        "others": 1,
+        "van": 4
+      },
+      "mapped_class_distribution_tracks": {
+        "bus": 8,
+        "car": 60,
+        "truck": 4
+      },
+      "ignored_class_distribution_tracks": {
+        "others": 1
+      },
+      "frame_target_annotations": 20981,
+      "camera_state": "unstable",
+      "weather": "night"
+    }
+  }
+}

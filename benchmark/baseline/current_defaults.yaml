@@ -1,0 +1,91 @@
+schema_version: 1
+snapshot_date: "2026-07-17"
+run_id: "phase-00-repository-audit-2026-07-17"
+git_commit: "1029440fc802fc6d39b70e016a00bf419331d475"
+purpose: "Phase 00 baseline freeze before benchmark protocol work"
+
+config_sources:
+  code_defaults:
+    file: "src/shared/config.py"
+    note: "BaseSettings defaults when no env/docker override is applied."
+  docker_compose:
+    file: "docker-compose.yml"
+    note: "Current API/worker runtime overrides; secret values intentionally not copied."
+  readme:
+    file: "README.md"
+    note: "Documents current stable live baseline."
+
+code_defaults:
+  ai:
+    AI_LOCAL: false
+    AI_MODEL_PATH: "models/yolov8n.pt"
+    AI_DEVICE: "0"
+    AI_IMGSZ: 640
+    AI_HALF: true
+    AI_CLASS_IDS: "2,3,5,7"
+    AI_CONFIDENCE: 0.4
+    AI_IOU: 0.45
+    AI_MAX_DET: 100
+    AI_FRAME_SKIP: 1
+    AI_ENABLE_STABILIZATION: false
+  roi:
+    ROI_MODE: "crop_rect"
+    ROI_CROP_PADDING: 0.10
+    OUTPUT_FRAME_MODE: "roi"
+    ROI_INPUT_SIZE: 640
+  live:
+    LIVE_READER_BACKEND: "auto"
+    LIVE_FFMPEG_OUTPUT_FPS: 15
+    LIVE_FFMPEG_REALTIME_PACING: true
+    LIVE_FFMPEG_RW_TIMEOUT_US: 10000000
+    LIVE_FRAME_QUEUE_SIZE: 1
+    LIVE_MAX_FRAME_AGE_SECONDS: 0.25
+    LIVE_TRACK_MIN_HITS: 3
+    LIVE_TRACK_MAX_LOST_SECONDS: 0.7
+    LIVE_TRACK_RESET_GAP_SECONDS: 1.0
+    LIVE_RECONNECT_ATTEMPTS: 3
+    LIVE_RECONNECT_DELAY_SECONDS: 1.0
+  tracker_renderer:
+    TRACK_MATCH_THRESHOLD: 0.3
+    TRACK_BUFFER: 8
+    RENDER_SHOW_LOST: false
+    RENDER_SHOW_OUT_OF_ZONE: false
+    RENDER_DEBUG: false
+    TRACK_FILTER_ZONE_PADDING_PX: 12.0
+
+docker_runtime_overrides:
+  api_and_worker:
+    AI_LOCAL: true
+    AI_MODEL_PATH: "models/yolo11m.pt"
+    AI_CLASS_IDS: "2,3,5,7"
+    AI_IMGSZ: 640
+    AI_CONFIDENCE: 0.4
+    AI_IOU: 0.45
+    AI_MAX_DET: 100
+    AI_FRAME_SKIP: 1
+    ROI_MODE: "crop_rect"
+    ROI_CROP_PADDING: 0.10
+    OUTPUT_FRAME_MODE: "roi"
+    CELERY_QUEUE_NAME: "trafficflow_gpu_queue"
+  api_live_only:
+    LIVE_FFMPEG_OUTPUT_FPS: 15
+    LIVE_FFMPEG_REALTIME_PACING: true
+    LIVE_FRAME_QUEUE_SIZE: 1
+    LIVE_MAX_FRAME_AGE_SECONDS: 0.25
+    LIVE_TRACK_MIN_HITS: 3
+    LIVE_TRACK_MAX_LOST_SECONDS: 0.7
+    LIVE_TRACK_RESET_GAP_SECONDS: 1.0
+    LIVE_RECONNECT_ATTEMPTS: 3
+    LIVE_RECONNECT_DELAY_SECONDS: 1.0
+    RENDER_DEBUG: false
+
+resolved_baseline_conflicts:
+  - "tests/test_api_integration.py now expects current AI_FRAME_SKIP=1, TRACK_MATCH_THRESHOLD=0.3, and TRACK_BUFFER=8."
+  - "LocalInferenceClient now accepts optional imgsz and still defaults to settings.AI_IMGSZ when omitted."
+  - "Local class-id parsing now enforces AI_CLASS_IDS=2,3,5,7 when configured."
+  - "Worker task serialization now preserves processing_roi and geometry_space-related fields."
+  - "Worker upload path now treats ROI_MODE=crop_rect as a crop-enabled mode and shifts source-frame lanes into crop-local processing coordinates."
+
+remaining_baseline_conflicts:
+  - "Settings default AI_MODEL_PATH is models/yolov8n.pt, while Docker/README stable live baseline uses models/yolo11m.pt."
+  - "Local host PowerShell PATH did not expose ffmpeg/ffprobe during this audit; live Docker image may still provide them."

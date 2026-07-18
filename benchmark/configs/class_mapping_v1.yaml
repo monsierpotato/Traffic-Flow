@@ -1,0 +1,45 @@
+schema_version: 1
+mapping_version: class_mapping_v1
+created_date: "2026-07-17"
+dataset: ua_detrac
+source_inventory_file: benchmark/splits/ua_detrac_inventory_v1.json
+observed_raw_labels:
+  car: 7167
+  bus: 311
+  van: 737
+  others: 74
+trafficflow_classes:
+  - car
+  - bus
+  - truck
+mapping:
+  car:
+    trafficflow_class: car
+    policy: exact
+    include_in_detection_metrics: true
+    include_in_tracking_metrics: true
+    include_in_counting_metrics: true
+  bus:
+    trafficflow_class: bus
+    policy: exact
+    include_in_detection_metrics: true
+    include_in_tracking_metrics: true
+    include_in_counting_metrics: true
+  van:
+    trafficflow_class: truck
+    policy: nearest_supported_vehicle_class
+    rationale: TrafficFlow uses COCO-style truck and does not expose a van class in the portfolio benchmark taxonomy.
+    include_in_detection_metrics: true
+    include_in_tracking_metrics: true
+    include_in_counting_metrics: true
+  others:
+    trafficflow_class: null
+    policy: ignored_unknown_vehicle_type
+    include_in_detection_metrics: false
+    include_in_tracking_metrics: false
+    include_in_counting_metrics: false
+unsupported_from_ua_detrac:
+  motorcycle:
+    reason: UA-DETRAC annotations in this repo do not contain a motorcycle-compatible raw label.
+    reporting_rule: Do not report motorcycle accuracy, recall, tracking, or counting metrics from UA-DETRAC.
+class_policy_for_matching: exact_or_documented_mapping

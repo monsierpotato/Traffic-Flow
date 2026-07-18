@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "sequence_id": "YT_sJvEFrG0wq0_live",
+  "geometry_version": "YT_sJvEFrG0wq0_live-manual-v1",
+  "geometry_space": "source_frame",
+  "roi_crop_padding": 0.1,
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 397,
+    "width": 1098,
+    "height": 683,
+    "purpose": "manual_review_reference"
+  },
+  "processing_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 397,
+    "width": 1098,
+    "height": 683,
+    "purpose": "inference_processing"
+  },
+  "crop_rect_padded": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 397,
+    "width": 1098,
+    "height": 683,
+    "padding_ratio": 0.1,
+    "source": "roi_polygon_bounding_box"
+  },
+  "processing_width": 1098,
+  "processing_height": 683,
+  "roi_polygon": [
+    [
+      319.68,
+      457.34
+    ],
+    [
+      14.31,
+      612.17
+    ],
+    [
+      14.31,
+      1038.55
+    ],
+    [
+      644.14,
+      1064.76
+    ],
+    [
+      999.6,
+      609.79
+    ],
+    [
+      319.68,
+      457.34
+    ]
+  ],
+  "roi_mode": "crop_rect",
+  "method": "counting_gate",
+  "settings": {
+    "anchor": "bottom_center",
+    "direction_cos_threshold": 0.35,
+    "dedup_key": "track_id_lane_id"
+  },
+  "lanes": [
+    {
+      "lane_id": "lane_1",
+      "direction_name": "forward",
+      "valid_zone": [
+        [
+          293.44,
+          462.11
+        ],
+        [
+          26.24,
+          588.35
+        ],
+        [
+          131.21,
+          769.39
+        ],
+        [
+          455.67,
+          593.12
+        ],
+        [
+          291.05,
+          464.49
+        ],
+        [
+          293.44,
+          462.11
+        ]
+      ],
+      "counting_line": [
+        [
+          88.27,
+          557.39
+        ],
+        [
+          221.87,
+          707.45
+        ]
+      ],
+      "direction": [
+        [
+          267.2,
+          574.06
+        ],
+        [
+          119.28,
+          645.52
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    },
+    {
+      "lane_id": "lane_2",
+      "direction_name": "forward",
+      "valid_zone": [
+        [
+          500.99,
+          574.06
+        ],
+        [
+          126.44,
+          764.62
+        ],
+        [
+          646.52,
+          1000.44
+        ],
+        [
+          937.57,
+          697.93
+        ],
+        [
+          500.59,
+          574.27
+        ],
+        [
+          500.99,
+          574.06
+        ]
+      ],
+      "counting_line": [
+        [
+          415.11,
+          605.03
+        ],
+        [
+          894.63,
+          750.33
+        ]
+      ],
+      "direction": [
+        [
+          479.52,
+          800.35
+        ],
+        [
+          644.14,
+          638.38
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    }
+  ]
+}

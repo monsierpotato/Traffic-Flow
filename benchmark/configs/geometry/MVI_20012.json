@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "sequence_id": "MVI_20012",
+  "geometry_version": "MVI_20012-geometry-v1",
+  "created_date": "2026-07-17",
+  "source": "phase02_default_full_frame_directional_gate",
+  "geometry_space": "source_frame",
+  "resolution": {
+    "width": 960,
+    "height": 540
+  },
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "manual_review_reference"
+  },
+  "processing_roi": {
+    "type": "rectangle",
+    "x": 0,
+    "y": 0,
+    "width": 960,
+    "height": 540,
+    "purpose": "inference_processing"
+  },
+  "method": "counting_gate",
+  "settings": {
+    "anchor": "bottom_center",
+    "direction_cos_threshold": 0.35,
+    "dedup_key": "track_id_lane_id",
+    "counting_line_relative_y": 0.62
+  },
+  "lanes": [
+    {
+      "lane_id": "full_down",
+      "direction": [
+        [
+          480.0,
+          0
+        ],
+        [
+          480.0,
+          540
+        ]
+      ],
+      "direction_name": "down",
+      "valid_zone": [
+        [
+          0,
+          0
+        ],
+        [
+          960,
+          0
+        ],
+        [
+          960,
+          540
+        ],
+        [
+          0,
+          540
+        ]
+      ],
+      "counting_line": [
+        [
+          0,
+          334.8
+        ],
+        [
+          960,
+          334.8
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    },
+    {
+      "lane_id": "full_up",
+      "direction": [
+        [
+          480.0,
+          540
+        ],
+        [
+          480.0,
+          0
+        ]
+      ],
+      "direction_name": "up",
+      "valid_zone": [
+        [
+          0,
+          0
+        ],
+        [
+          960,
+          0
+        ],
+        [
+          960,
+          540
+        ],
+        [
+          0,
+          540
+        ]
+      ],
+      "counting_line": [
+        [
+          0,
+          334.8
+        ],
+        [
+          960,
+          334.8
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck"
+      ]
+    }
+  ],
+  "notes": [
+    "Phase 02 v1 uses a full-frame two-direction gate for reproducible derived GT.",
+    "Geometry is not tuned from model predictions and must be version-bumped before replacement."
+  ]
+}

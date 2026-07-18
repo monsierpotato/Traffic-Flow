@@ -1,0 +1,113 @@
+protocol_version: 1
+created_date: "2026-07-17"
+protocol_name: ua_detrac_trafficflow_benchmark_protocol_v1
+split_file: benchmark/splits/ua_detrac_split_v1.json
+inventory_file: benchmark/splits/ua_detrac_inventory_v1.json
+class_mapping_file: benchmark/configs/class_mapping_v1.yaml
+split_unit: full_sequence
+random_frame_split: forbidden
+nominal_fps_for_image_sequence_conversion: 25
+fps_policy: record_actual_video_fps_in_run_manifest; use_nominal_fps_25_for_image_sequence_conversion_when_no_source_fps_exists
+geometry_policy: per_sequence_frozen_before_prediction_scoring
+test_tuning_policy:
+  held_out_test_may_tune: false
+  development_may_tune: true
+  smoke_test_for_pipeline_checks_only: true
+  reserve_only_requires_protocol_bump: true
+coordinate_spaces:
+  allowed:
+    - source_frame
+    - crop_local
+    - model_input
+  rule: every geometry, detection, track, event, and report artifact must state its coordinate_space
+counting_event_match:
+  same_video: true
+  same_lane: true
+  same_direction: true
+  class_policy: exact_or_documented_mapping
+  temporal_tolerance_frames: 5
+  spatial_tolerance_pixels: null
+  matching_algorithm: one_to_one_hungarian_preferred
+tracking:
+  evaluator: TrackEval
+  primary_metrics:
+    - HOTA
+    - DetA
+    - AssA
+    - IDF1
+    - IDSW
+    - Frag
+  class_policy: mapped_classes_only
+  ignored_raw_classes:
+    - others
+detection:
+  evaluator: documented_evaluator_version_required_at_run_time
+  primary_metrics:
+    - AP50
+    - AP50_95
+    - precision
+    - recall
+    - f1
+  iou_thresholds:
+    ap50: 0.50
+    coco_ap: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+counting:
+  derived_gt_name: derived task-specific counting ground truth
+  primary_metrics:
+    - event_precision
+    - event_recall
+    - event_f1
+    - WAPE
+    - signed_bias
+  event_metrics:
+    - event_precision
+    - event_recall
+    - event_f1
+    - missed_crossing_rate
+    - false_crossing_rate
+    - duplicate_count_rate
+    - wrong_lane_rate
+    - wrong_class_rate
+    - wrong_direction_rate
+    - crossing_time_error_median
+    - crossing_time_error_p95
+  aggregate_metrics:
+    - MAE
+    - RMSE
+    - WAPE
+    - signed_bias
+    - exact_count_accuracy
+    - within_1_accuracy
+  aggregate_unit: video_x_lane_x_class_x_direction
+runtime:
+  warmup_frames: 30
+  timing_window: steady_state
+  percentiles: [p50, p95, p99]
+  uploaded_video_stages:
+    - decode
+    - preprocess
+    - inference
+    - tracking
+    - counting
+    - rendering
+    - encoding
+  live_metrics_required:
+    - processed_fps
+    - published_fps
+    - frame_interarrival_p50_p95_p99
+    - frame_age_p50_p95_p99
+    - dropped_frame_ratio
+    - stale_frame_ratio
+    - inference_wall_p50_p95_p99
+    - reconnect_count
+    - stall_count_per_hour
+    - peak_vram
+    - gpu_utilization
+reproducibility_requirements:
+  run_manifest_required: true
+  git_commit_required: true
+  config_snapshot_required: true
+  model_sha256_required: true
+  raw_predictions_required: true
+  environment_snapshot_required: true
+  no_test_set_tuning_after_freeze: true
