@@ -47,7 +47,10 @@ celery_app.conf.update(
 def _send_callback(url: str, payload: dict):
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="PUT",
+        headers={
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {settings.CALLBACK_TOKEN}"} if settings.CALLBACK_TOKEN else {}),
+        }, method="PUT",
     )
     try:
         with urllib.request.urlopen(req) as resp:
@@ -140,7 +143,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Parse lane config ---
         processing_roi = lane_config.get("processing_roi") or lane_config.get("annotation_roi")
         has_crop = bool(processing_roi)
-        use_detection_crop = has_crop and settings.ROI_MODE == "roi_crop"
+        use_detection_crop = has_crop and settings.ROI_MODE in ("roi_crop", "crop_rect")
         if use_detection_crop:
             cx = int(processing_roi.get("x", 0)); cy = int(processing_roi.get("y", 0))
             cw = int(processing_roi.get("width", 0)); ch = int(processing_roi.get("height", 0))
@@ -188,8 +191,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        counter = CountingState(lanes)
-        renderer = FrameRenderer(lanes, settings_obj=settings)
+        counter = CountingState(lanes_source)
+        renderer = FrameRenderer(lanes_source, settings_obj=settings)
 
         # Stabilisation reference frame
         if settings.AI_ENABLE_STABILIZATION:
@@ -218,7 +221,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         processed = 0
         last_progress = 15
         last_detections = []
-        frame_skip = settings.AI_FRAME_SKIP
+        frame_skip = max(1, settings.AI_FRAME_SKIP)
         pending_future = None
         pending_submitted_at = None
         pending_frame_idx = None

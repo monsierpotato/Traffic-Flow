@@ -111,7 +111,7 @@ class FrameProcessor:
         full_h, full_w = frame.shape[:2]
 
         # 2. Crop
-        if self.roi_mode == "roi_crop" and crop_rect:
+        if self.roi_mode in ("roi_crop", "crop_rect") and crop_rect:
             min_x, min_y, max_x, max_y = crop_rect
             if max_y > min_y and max_x > min_x:
                 cropped = frame[min_y:max_y, min_x:max_x]
@@ -126,7 +126,7 @@ class FrameProcessor:
         crop_h, crop_w = cropped.shape[:2]
 
         # 3. Polygon mask (within cropped space)
-        if self.roi_mode in ("roi_crop", "roi_mask") and poly_mask is not None and len(poly_mask) >= 3:
+        if self.roi_mode in ("roi_crop", "crop_rect", "roi_mask") and poly_mask is not None and len(poly_mask) >= 3:
             mask = np.zeros(cropped.shape[:2], dtype=np.uint8)
             cv2.fillPoly(mask, [poly_mask], 255)
             cropped = cv2.bitwise_and(cropped, cropped, mask=mask)

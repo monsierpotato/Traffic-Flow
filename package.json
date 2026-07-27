@@ -1,0 +1,23 @@
+{
+  "name": "traffic-flow-local-stack",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "scripts/local-stack.mjs",
+  "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "install:python": ".venv/bin/python -m pip install -e \".[api,worker,benchmark,dev,gpu]\"",
+    "install:gpu": ".venv/bin/python -m pip install -e \".[gpu]\"",
+    "install:frontend": "npm --prefix frontend ci",
+    "build": "npm run install:frontend && npm --prefix frontend run build",
+    "dev": "npm run preflight && node scripts/local-stack.mjs",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 127.0.0.1",
+    "dev:api": "PYTHONPATH=src .venv/bin/python -m uvicorn api.app:create_app --factory --host 127.0.0.1 --port 8000 --reload",
+    "dev:worker": "PYTHONPATH=src .venv/bin/celery -A worker.celery_app worker --pool=solo --concurrency=1 -Q trafficflow_gpu_queue --loglevel=info",
+    "start:api": "PYTHONPATH=src .venv/bin/python -m uvicorn api.app:create_app --factory --host 127.0.0.1 --port 8000",
+    "start:worker": "PYTHONPATH=src .venv/bin/celery -A worker.celery_app worker --pool=solo --concurrency=1 -Q trafficflow_gpu_queue --loglevel=info",
+    "test:frontend": "npm --prefix frontend run build",
+    "test:python": "PYTHONPATH=src .venv/bin/python -m pytest -q tests",
+    "test:focused": "PYTHONPATH=src .venv/bin/python -m pytest -q tests --ignore=tests/test_api_integration.py --ignore=tests/test_live_stream_hardening.py"
+  }
+}

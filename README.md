@@ -2,7 +2,7 @@
 
 Hệ thống phân tích giao thông bằng video: phát hiện, theo dõi và đếm xe theo từng làn đường. Người dùng upload video giao thông hoặc kết nối luồng trực tiếp (YouTube/HLS), vẽ vùng giám sát — hệ thống tự động trả về video có overlay và bảng thống kê số lượng xe theo làn, loại xe và hướng di chuyển.
 
-Dự án nhóm 5 thành viên, triển khai qua Docker với GPU local.
+Dự án nhóm 5 thành viên, hiện ưu tiên chạy native bằng Node.js + Python trên máy local. Docker/Compose được giữ lại như artifact lịch sử, không còn là đường chạy mặc định.
 
 ---
 
@@ -30,7 +30,7 @@ Người dùng / Frontend
 - **Vẽ trực quan** vùng giám sát (ROI), làn đường, đường đếm và hướng xe ngay trên giao diện web
 - **AI Pipeline**: YOLO phát hiện xe → ByteTrack theo dõi → Lọc theo làn → Đếm xe qua vạch
 - **Dashboard** thống kê: số lượng xe theo làn, loại xe (car, bus, truck, motorcycle) và hướng
-- **GPU acceleration** local qua Docker — không phụ thuộc cloud GPU
+- **GPU acceleration** local qua Python environment; nếu thiếu CUDA/model thì preflight báo BLOCKED rõ ràng
 
 ---
 
@@ -95,7 +95,7 @@ Input frame
 - **Direction-aware counting**: chỉ đếm xe đi đúng hướng, bỏ qua xe đi ngược chiều
 - **Event semantics**: mỗi counting event có video_id, lane_id, class, direction, crossing_frame, crossing_time
 
-Chi tiết đầy đủ: [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md)
+Chi tiết đầy đủ: [docs/current/architecture.md](docs/current/architecture.md)
 
 ---
 
@@ -133,7 +133,7 @@ Audit repository → Freeze baseline → Freeze dataset split (theo sequence, kh
 | Tốc độ xử lý video upload |     FPS / Real-time factor | 75.8 FPS / 3.03×      |
 | Live stream (30 phút soak)    | FPS / Frame age p95 / Drop | 14.9 FPS / 0.9 ms / 0% |
 
-Chi tiết từng phase: [docs/reports/](docs/reports/)
+Tài liệu vận hành: [docs/current/](docs/current/)
 
 ---
 
@@ -165,7 +165,7 @@ Initial system (cơ bản)
 | Quang Nhật  | AI Pipeline Engineer       | Runtime engine, YOLO/ByteTrack inference, lane geometry, tracking, counting, benchmark & evaluation |
 | Công Phúc  | Frontend Engineer          | Upload UI, canvas lane drawing, coordinate scaling, progress/result dashboard                       |
 | Thái Hưng  | Backend Engineer           | FastAPI, database schema, upload/preview API, task/result APIs, data retention, file validation     |
-| Minh Tiến   | DevOps / Worker Engineer   | Celery/Redis, worker, Docker, compose, GPU allocation, environment configuration                    |
+| Minh Tiến   | DevOps / Worker Engineer   | Celery/Redis, worker, native process orchestration, GPU allocation, environment configuration        |
 | Tuấn Hưng  | Integration / QA / Release | End-to-end QA, coordinate alignment, queue stress testing, release checklist                        |
 
 ---
@@ -178,25 +178,29 @@ Initial system (cơ bản)
 | Backend  | FastAPI, Celery, Redis, MongoDB Atlas                      |
 | Frontend | React (Vite), HTML5 Canvas                                 |
 | Storage  | Cloudflare R2                                              |
-| DevOps   | Docker, Docker Compose, NVIDIA Container Toolkit           |
+| DevOps   | Node.js scripts, native Redis, NVIDIA runtime configuration |
 
 ---
 
-## Quick Start
+## Quick Start — native local (không Docker)
 
 ```bash
 cd TrafficFlow
-docker compose build
-docker compose up -d
+cp .env.example .env
+python3 -m venv .venv
+npm run install:python
+npm run install:frontend
+npm run preflight
+npm run dev
 ```
 
-Mở trình duyệt: **http://localhost:8000**
+Mở trình duyệt: **http://127.0.0.1:5173**. API chạy tại **http://127.0.0.1:8000**.
 
-3 containers: `api` (FastAPI + React), `worker` (YOLO GPU), `redis` (broker).
+`npm run dev` khởi động API và Vite frontend. Celery worker chỉ được khởi động khi Redis native đang lắng nghe ở `127.0.0.1:6379`; nếu không, stack vẫn chạy UI/API nhưng báo worker là BLOCKED.
 
-Yêu cầu: Docker, Docker Compose, NVIDIA GPU + Container Toolkit (khuyến nghị RTX 3060+).
+Yêu cầu tối thiểu: Node.js 20+, Python 3.10+, FFmpeg và FFprobe. MongoDB không bắt buộc ở local vì có JSON fallback; Redis và model weights là bắt buộc cho batch inference thật.
 
-Hướng dẫn chi tiết (cấu hình `.env`, API endpoints, xử lý lỗi): **[docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md)**
+Hướng dẫn native chi tiết: **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**. Tài liệu Docker cũ vẫn được giữ để tham chiếu lịch sử, nhưng không dùng cho luồng phát triển hiện tại.
 
 ---
 
@@ -205,11 +209,10 @@ Hướng dẫn chi tiết (cấu hình `.env`, API endpoints, xử lý lỗi): *
 | Tài liệu                                            | Nội dung                                                                |
 | ----------------------------------------------------- | ------------------------------------------------------------------------ |
 | [docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md) | Hướng dẫn triển khai & sử dụng chi tiết                           |
-| [docs/portfolio/](docs/portfolio/)                     | AI pipeline, benchmark methodology, error analysis, CV package           |
-| [docs/reports/](docs/reports/)                         | Báo cáo benchmark từng phase (detection, tracking, counting, runtime) |
-| [docs/wiki/](docs/wiki/)                               | Wiki nội bộ: kiến trúc, quyết định kỹ thuật, sprint backlog     |
+| [docs/current/](docs/current/)                         | Kiến trúc và runbook hiện tại                                      |
+| [docs/API_INTEGRATION.md](docs/API_INTEGRATION.md)     | API, task state machine và callback                               |
 | [docs/contracts/](docs/contracts/)                     | API contracts: lane config, progress callback, kết quả                 |
-| [benchmark/](benchmark/)                               | Bộ benchmark có thể tái lập: configs, splits, predictions, reports  |
+| [benchmark/](benchmark/)                               | Benchmark core cho detection, tracking, counting và runtime       |
 
 ---
 

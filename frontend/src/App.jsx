@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiBlob, apiRequest } from "./api/client";
 
 const STEPS = [
   { id: "upload", label: "Source", icon: "upload_file", help: "Upload a file or resolve a live stream." },
@@ -11,18 +12,12 @@ const CLASS_ALLOWED = ["car", "bus", "truck", "motorcycle"];
 const LANE_COLORS = ["#9fc9a2", "#dfa88f", "#8fb8df", "#d7bd72", "#b89fdb", "#78c8be"];
 
 const emptyResult = {
-  status: "completed",
-  frames: 300,
-  total_frames: 300,
-  counts: {
-    lane_1: { car: 12, bus: 1, truck: 2, motorcycle: 4 },
-    lane_2: { car: 9, motorcycle: 11 },
-  },
-  total_count: 39,
-  outputs: {
-    video_path: null,
-    events_jsonl_path: "outputs/demo_events.jsonl",
-  },
+  status: "idle",
+  frames: 0,
+  total_frames: 0,
+  counts: {},
+  total_count: 0,
+  outputs: {},
 };
 
 function App() {
@@ -100,7 +95,7 @@ function App() {
       setTaskStatus({ status: response.status, progress: 0 });
       appendLog(`task created: ${response.task_id}`);
 
-      const previewAsset = await fetchPreview(response.task_id, file, localVideoUrl);
+      const previewAsset = await fetchPreview(response.task_id);
       setPreview(previewAsset);
       appendLog(`preview ready: ${previewAsset.width}x${previewAsset.height}`);
       goTo(1);
@@ -417,7 +412,7 @@ function UploadStep({ onUpload, onLiveResolve, logs }) {
         />
         <span className={`material-symbols-outlined upload-icon ${busy ? "spin" : ""}`}>{busy ? "progress_activity" : "upload_file"}</span>
         <h3>{busy ? "Extracting reference frame..." : "Drag and drop video feed"}</h3>
-        <p>MP4 or AVI. Backend upload is attempted first, then local mock mode takes over if unavailable.</p>
+        <p>MP4 or AVI. The backend stores the source and generates the preview before annotation.</p>
         <button className="secondary-button" type="button">Browse Files</button>
       </div>
       <div id="system-logs"><Terminal lines={logs} /></div>
@@ -706,7 +701,6 @@ function SettingsPanel({ settings, setSettings }) {
 }
 
 function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
-  const startedRef = useRef(taskStatus.startedAt || Date.now());
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
   const [liveSession, setLiveSession] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
@@ -715,18 +709,26 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
     if (sourceMode === "live") return undefined;
     let cancelled = false;
     const interval = window.setInterval(async () => {
-      const elapsed = Date.now() - startedRef.current;
-      const fallbackProgress = Math.min(100, Math.round(elapsed / 55));
-      const statusPayload = await pollTask(taskId, fallbackProgress);
-      if (cancelled) return;
-      setTaskStatus(statusPayload);
-      if (statusPayload.status === "succeeded" || statusPayload.status === "completed") {
-        window.clearInterval(interval);
-        const nextResult = await fetchResult(taskId);
-        if (!cancelled) {
-          setResult(nextResult);
-          appendLog("result dashboard activated");
+      try {
+        const statusPayload = await pollTask(taskId);
+        if (cancelled) return;
+        setTaskStatus(statusPayload);
+        if (statusPayload.status === "succeeded" || statusPayload.status === "completed") {
+          window.clearInterval(interval);
+          const nextResult = await fetchResult(taskId);
+          if (!cancelled) {
+            setResult(nextResult);
+            appendLog("result dashboard activated");
+          }
+        } else if (statusPayload.status === "failed") {
+          window.clearInterval(interval);
+          appendLog(`task failed: ${statusPayload.error_message || statusPayload.stage_detail || "unknown error"}`);
         }
+      } catch (error) {
+        if (cancelled) return;
+        window.clearInterval(interval);
+        setTaskStatus({ status: "error", progress: 0, stage: "poll_failed", stage_detail: error.message });
+        appendLog(`task polling failed: ${error.message}`);
       }
     }, 1500);
     return () => {
@@ -745,14 +747,22 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
     if (!liveSession?.session_id) return;
     let cancelled = false;
     const interval = window.setInterval(async () => {
-      const next = await fetchLiveSession(liveSession.session_id);
-      if (!cancelled && next) setLiveSession(next);
+      try {
+        const next = await fetchLiveSession(liveSession.session_id);
+        if (!cancelled && next) setLiveSession(next);
+      } catch (error) {
+        if (!cancelled) {
+          setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
+          appendLog(`live polling failed: ${error.message}`);
+          window.clearInterval(interval);
+        }
+      }
     }, 1500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [liveSession?.session_id]);
+  }, [appendLog, liveSession?.session_id]);
 
   async function startLiveSession() {
     if (!liveUrl.trim() || !submittedConfig) return;
@@ -772,16 +782,24 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
   async function stopLiveSession() {
     if (!liveSession?.session_id) return;
     appendLog(`stopping live session: ${liveSession.session_id.slice(0, 8)}`);
-    await stopLive(liveSession.session_id);
-    setLiveSession((current) => current ? { ...current, status: "stopping" } : current);
+    try {
+      await stopLive(liveSession.session_id);
+      setLiveSession((current) => current ? { ...current, status: "stopping" } : current);
+    } catch (error) {
+      appendLog(`live stop failed: ${error.message}`);
+    }
   }
 
   async function clearLiveSession() {
     if (!liveSession?.session_id) return;
     const sessionId = liveSession.session_id;
-    await removeLive(sessionId);
-    setLiveSession(null);
-    appendLog(`live session removed: ${sessionId.slice(0, 8)}`);
+    try {
+      await removeLive(sessionId);
+      setLiveSession(null);
+      appendLog(`live session removed: ${sessionId.slice(0, 8)}`);
+    } catch (error) {
+      appendLog(`live removal failed: ${error.message}`);
+    }
   }
 
   const visibleResult = result || emptyResult;
@@ -868,7 +886,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
         </div>
       </section>
       <aside className="metrics-panel">
-        <Metric label="Task ID" value={taskId || "mock-task"} small />
+        <Metric label="Task ID" value={taskId || "--"} small />
         <Metric label="Progress" value={`${progress}%`} />
         <Metric label="Stage" value={taskStatus.stage || taskStatus.status || "--"} />
         <Metric label="Frames" value={`${visibleResult.frames}/${visibleResult.total_frames}`} />
@@ -957,7 +975,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
             `> source_mode=${sourceMode || "video"}`,
             `> stage=${taskStatus.stage || "--"}`,
             `> detail=${taskStatus.stage_detail || "--"}`,
-            `> task_id=${taskId || "mock-task"}`,
+            `> task_id=${taskId || "--"}`,
             `> lanes=${submittedConfig?.lanes?.length ?? 0}`,
             `> progress=${progress}`,
             `> live=${liveSession?.status || "idle"} fps=${liveSession?.fps ?? "--"}`,
@@ -1029,135 +1047,64 @@ function JsonModal({ title, data, onClose }) {
 async function uploadVideo(file) {
   const form = new FormData();
   form.append("file", file);
-  try {
-    const response = await fetch("/videos", { method: "POST", body: form });
-    if (response.ok) return response.json();
-  } catch {
-    // Local Vite demo mode.
-  }
-  await wait(700);
-  return { task_id: createId(), status: "draft" };
+  return apiRequest("/videos", { method: "POST", body: form });
 }
 
-async function fetchPreview(taskId, file, localVideoUrl) {
-  try {
-    const response = await fetch(`/videos/${taskId}/preview`);
-    if (response.ok) {
-      const blob = await response.blob();
-      return await loadImage(URL.createObjectURL(blob));
-    }
-  } catch {
-    // Fall back to extracting the first frame from the uploaded video.
-  }
-  return extractFrameFromVideo(file, localVideoUrl);
+async function fetchPreview(taskId) {
+  const blob = await apiBlob(`/videos/${taskId}/preview`);
+  return loadImage(URL.createObjectURL(blob));
 }
 
 async function resolveLiveSource(url) {
-  try {
-    const response = await fetch("/live/resolve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (response.ok) return payload;
-    return { error: payload.detail || "Could not resolve live source" };
-  } catch (error) {
-    return { error: String(error) };
-  }
+  return apiRequest("/live/resolve", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
 }
 
 async function validateLiveConfig(config) {
   try {
-    const response = await fetch("/live/validate-config", {
+    return await apiRequest("/live/validate-config", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lane_config: config }),
     });
-    if (response.ok) return response.json();
-    const payload = await response.json().catch(() => ({}));
-    return { valid: false, errors: payload.detail?.errors || payload.errors || [payload.detail || "Validation failed"] };
   } catch (error) {
-    return { valid: false, errors: [String(error)] };
+    return { valid: false, errors: [error.message] };
   }
 }
 
 async function submitTask(taskId, config) {
-  try {
-    const response = await fetch("/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_id: taskId, lane_config: config }),
-    });
-    if (response.ok) return response.json();
-  } catch {
-    // Local Vite demo mode.
-  }
-  await wait(500);
-  return { task_id: taskId, status: "queued", progress: 0 };
+  return apiRequest("/tasks", {
+    method: "POST",
+    body: JSON.stringify({ task_id: taskId, lane_config: config }),
+  });
 }
 
-async function pollTask(taskId, fallbackProgress) {
-  try {
-    const response = await fetch(`/tasks/${taskId}`);
-    if (response.ok) return response.json();
-  } catch {
-    // Local Vite demo mode.
-  }
-  const status = fallbackProgress >= 100 ? "succeeded" : fallbackProgress > 20 ? "running" : "queued";
-  return { task_id: taskId, status, progress: fallbackProgress };
+async function pollTask(taskId) {
+  return apiRequest(`/tasks/${taskId}`);
 }
 
 async function fetchResult(taskId) {
-  try {
-    const response = await fetch(`/tasks/${taskId}/result`);
-    if (response.ok) return response.json();
-  } catch {
-    // Local Vite demo mode.
-  }
-  await wait(350);
-  return emptyResult;
+  return apiRequest(`/tasks/${taskId}/result`);
 }
 
 async function createLiveSession(sourceUrl, laneConfig) {
-  try {
-    const response = await fetch("/live/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
-    });
-    if (response.ok) return response.json();
-    const payload = await response.json().catch(() => ({}));
-    return { status: "failed", last_error: payload.detail || "Could not start live session" };
-  } catch (error) {
-    return { status: "failed", last_error: String(error) };
-  }
+  return apiRequest("/live/sessions", {
+    method: "POST",
+    body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
+  });
 }
 
 async function fetchLiveSession(sessionId) {
-  try {
-    const response = await fetch(`/live/sessions/${sessionId}`);
-    if (response.ok) return response.json();
-  } catch {
-    return null;
-  }
-  return null;
+  return apiRequest(`/live/sessions/${sessionId}`);
 }
 
 async function stopLive(sessionId) {
-  try {
-    await fetch(`/live/sessions/${sessionId}`, { method: "DELETE" });
-  } catch {
-    // Ignore stop failures in demo mode.
-  }
+  return apiRequest(`/live/sessions/${sessionId}`, { method: "DELETE" });
 }
 
 async function removeLive(sessionId) {
-  try {
-    await fetch(`/live/sessions/${sessionId}/remove`, { method: "DELETE" });
-  } catch {
-    // Ignore remove failures in demo mode.
-  }
+  return apiRequest(`/live/sessions/${sessionId}/remove`, { method: "DELETE" });
 }
 
 function createLane(index) {
@@ -1420,22 +1367,6 @@ function createCropAsset(preview, cropRect) {
   };
 }
 
-async function extractFrameFromVideo(file, localVideoUrl) {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "metadata";
-  video.src = localVideoUrl || URL.createObjectURL(file);
-  await once(video, "loadedmetadata");
-  video.currentTime = Math.min(0.2, Math.max(0, (video.duration || 1) / 20));
-  await once(video, "seeked");
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth || 1280;
-  canvas.height = video.videoHeight || 720;
-  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-  return loadImage(canvas.toDataURL("image/jpeg", 0.92));
-}
-
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -1443,10 +1374,6 @@ function loadImage(src) {
     image.onerror = reject;
     image.src = src;
   });
-}
-
-function once(target, eventName) {
-  return new Promise((resolve) => target.addEventListener(eventName, resolve, { once: true }));
 }
 
 function clampPoint(point, width, height) {
@@ -1464,14 +1391,10 @@ function handleHitRadius(asset) {
   return Math.max(12, Math.min(asset.width, asset.height) * 0.018);
 }
 
-function wait(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function createId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const random = Math.random().toString(16).slice(2);
-  return `mock-${Date.now().toString(16)}-${random}`;
+  return `client-${Date.now().toString(16)}-${random}`;
 }
 
 function round(value) {

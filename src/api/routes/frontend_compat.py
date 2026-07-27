@@ -10,6 +10,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from shared.database import get_database
+from shared.config import settings
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path
 from api.schemas.task import TaskCreateRequest
@@ -68,7 +69,7 @@ async def compat_upload(request: Request, file: UploadFile = File(...)):
 
 @router.get("/videos/{task_id}/preview")
 async def compat_preview(task_id: str):
-    preview = Path("storage/previews") / f"{task_id}.jpg"
+    preview = Path(settings.STORAGE_DIR) / "previews" / f"{task_id}.jpg"
     if preview.exists():
         return FileResponse(str(preview), media_type="image/jpeg")
     raise HTTPException(404, "Preview not found")

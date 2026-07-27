@@ -27,8 +27,14 @@ api = [
     "motor",
     "apscheduler",
     "boto3",
+    "certifi",
     "python-multipart",
     "yt-dlp",
+    "pydantic-settings",
+    "python-dotenv",
+]
+benchmark = [
+    "scipy",
 ]
 gpu = [
     "ultralytics",
@@ -40,11 +46,15 @@ gpu = [
 dev = [
     "pytest",
     "psutil",
+    "httpx>=0.27",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = [
+    "api*",
+    "shared*",
+    "worker*",
     "tfengine",
     "tfengine.runtime*",
     "tfengine.core_ai*",

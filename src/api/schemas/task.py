@@ -1,7 +1,6 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
-from api.schemas.lane import LaneConfigRequest
 
 class TaskCreateRequest(BaseModel):
     video_id: str
@@ -59,4 +58,7 @@ class TaskResultResponse(BaseModel):
     multi_lane_track_count: int = 0
     multi_lane_tracks: List[Dict[str, Any]] = Field(default_factory=list)
     processing_time_seconds: Optional[float] = None
-    lane_config: Optional[LaneConfigRequest] = None
+    # Result payloads may contain legacy lane configs that predate the strict
+    # create-request schema. Keep the read model tolerant and preserve the
+    # stored snapshot instead of rejecting an otherwise completed task.
+    lane_config: Optional[Dict[str, Any]] = None

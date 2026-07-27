@@ -14,7 +14,14 @@ class Settings(BaseSettings):
     MONGODB_URI: str = Field(default="mongodb://localhost:27017/")
     MONGODB_DB_NAME: str = Field(default="trafficflow")
     MONGODB_LOCAL_FALLBACK: bool = Field(default=True)
+    MONGODB_TLS: bool = Field(default=False)
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=1500, ge=100, le=120000)
+    MONGODB_CONNECT_TIMEOUT_MS: int = Field(default=1500, ge=100, le=120000)
     LOCAL_DB_PATH: str = Field(default="storage/local_db.json")
+    APP_ENV: str = Field(default="local")
+    CORS_ORIGINS: str = Field(default="http://127.0.0.1:5173")
+    CALLBACK_HOST: str = Field(default="http://127.0.0.1:8000")
+    CALLBACK_TOKEN: str = Field(default="")
     YTDLP_COOKIES_FILE: str = Field(default="")
     YTDLP_JS_RUNTIME: str = Field(default="")
     YTDLP_REMOTE_COMPONENTS: str = Field(default="")
@@ -45,12 +52,14 @@ class Settings(BaseSettings):
 
     # Redis/Celery configuration
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    REDIS_CONNECT_TIMEOUT_SECONDS: float = Field(default=0.5, gt=0, le=30)
     CELERY_QUEUE_NAME: str = Field(default="trafficflow_queue")
 
     # Validation rules
     MAX_FILE_SIZE_MB: int = Field(default=2048)
     ALLOWED_VIDEO_EXTENSIONS: List[str] = [".mp4", ".avi", ".mov", ".mkv", ".webm"]
     RETENTION_DAYS: int = Field(default=3)
+    STORAGE_DIR: str = Field(default="storage")
 
     # Video normalization (4K → 1080p working copy)
     VIDEO_MAX_WIDTH: int = Field(default=1920)
@@ -61,8 +70,9 @@ class Settings(BaseSettings):
     VIDEO_TRANSCODE_CRF: int = Field(default=20)
     STORE_ORIGINAL_VIDEO: bool = Field(default=False)
 
-    # AI Serving (Local GPU / Modal GPU) configuration
-    AI_LOCAL: bool = Field(default=False)
+    # Local inference is the supported default; remote serving remains an
+    # explicit compatibility fallback for deployments that set AI_LOCAL=false.
+    AI_LOCAL: bool = Field(default=True)
     AI_SERVING_URL: str = Field(default="https://tienpm205--trafficflow-inference-fastapi-app.modal.run")
     AI_MODEL_PATH: str = Field(default="models/yolov8n.pt")
     AI_DEVICE: str = Field(default="0")
@@ -91,6 +101,9 @@ class Settings(BaseSettings):
     RENDER_SHOW_OUT_OF_ZONE: bool = Field(default=False)
     RENDER_DEBUG: bool = Field(default=False)
     TRACK_FILTER_ZONE_PADDING_PX: float = Field(default=12.0)
+
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
 # Global settings instance
 settings = Settings()

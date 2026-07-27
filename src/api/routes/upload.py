@@ -8,12 +8,13 @@ from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path
 from api.schemas.upload import UploadResponse
+from shared.config import settings
 
 router = APIRouter()
 
 # --- Chunked upload ---
 
-CHUNK_DIR = Path("storage/chunks")
+CHUNK_DIR = Path(settings.STORAGE_DIR) / "chunks"
 
 
 async def _save_upload_to_temp(file: UploadFile) -> str:
@@ -151,4 +152,3 @@ async def upload_video(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while uploading: {str(e)}"
         )
-

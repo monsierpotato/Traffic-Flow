@@ -20,7 +20,7 @@ from shared.config import settings
 
 router = APIRouter()
 
-LIVE_PREVIEW_DIR = Path("storage/live_previews")
+LIVE_PREVIEW_DIR = Path(settings.STORAGE_DIR) / "live_previews"
 LIVE_SOURCES: Dict[str, dict] = {}
 
 
