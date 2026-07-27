@@ -567,7 +567,7 @@ class LiveSessionManager:
             last_tick = time.time()
             last_processed = 0
             frame_idx = 0
-            session.model_name = settings.AI_MODEL_PATH
+            session.model_name = settings.resolved_model_path()
             session.roi_mode = live_roi_mode
             session.ai_imgsz = settings.AI_IMGSZ
             session.status = "running"
@@ -816,4 +816,3 @@ def _counts_map(counter: CountingState, lanes: list) -> Dict[str, Dict[str, int]
 
 
 live_manager = LiveSessionManager()
-

@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from tfengine.core_ai import Detection, YoloByteTrackDetector
+from shared.runtime_paths import resolve_model_path
 
 
 # ---------------------------------------------------------------------------
@@ -94,13 +95,14 @@ store: SessionStore = None  # type: ignore[assignment]
 _raw_model: Optional[YoloByteTrackDetector] = None
 
 
-def init_store(model_path: str = "models/yolov8n.pt",
+def init_store(model_path: str = "yolov8n.pt",
                classes: Optional[list[str]] = None,
                confidence: float = 0.25,
                device: Optional[str] = None,
                ttl: float = 600.0,
                max_sessions: int = 32) -> None:
     global store, _raw_model
+    model_path = resolve_model_path(model_path)
     allowed = classes or ["car", "bus", "truck", "motorcycle", "motorbike"]
     store = SessionStore(
         model_path=model_path,
@@ -254,7 +256,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="models/yolov8n.pt")
+    parser.add_argument("--model", default="yolov8n.pt")
     parser.add_argument("--device", default=None)
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--host", default="0.0.0.0")

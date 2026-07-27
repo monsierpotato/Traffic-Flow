@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveModelPath } from "./runtime-paths.mjs";
 
 const root = resolve(import.meta.dirname, "..");
-const modelPath = process.env.AI_MODEL_PATH ?? readDotenvValue("AI_MODEL_PATH") ?? "models/yolov8n.pt";
+const modelPath = resolveModelPath(root).path;
 const checks = [
   ["python", resolve(root, ".venv/bin/python")],
   ["celery", resolve(root, ".venv/bin/celery")],
@@ -40,13 +41,3 @@ if (modelExists) {
 }
 
 if (blocked) process.exit(1);
-
-function readDotenvValue(key) {
-  try {
-    const contents = readFileSync(resolve(root, ".env"), "utf8");
-    const match = contents.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, "m"));
-    return match?.[1]?.trim().replace(/^['\"]|['\"]$/g, "") || null;
-  } catch {
-    return null;
-  }
-}

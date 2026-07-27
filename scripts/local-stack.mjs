@@ -2,12 +2,13 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
+import { resolveModelPath } from "./runtime-paths.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const python = resolve(root, ".venv/bin/python");
 const celery = resolve(root, ".venv/bin/celery");
 const frontendDir = resolve(root, "frontend");
-const modelPath = resolve(root, envModelPath());
+const modelPath = resolveModelPath(root).path;
 
 if (!existsSync(python)) {
   console.error("[preflight] Missing .venv/bin/python. Create the environment first.");
@@ -124,10 +125,6 @@ function redisEndpoint(redisUrl) {
   } catch {
     return { host: "127.0.0.1", port: 6379 };
   }
-}
-
-function envModelPath() {
-  return envValue("AI_MODEL_PATH", "models/yolov8n.pt");
 }
 
 function envValue(key, fallback) {

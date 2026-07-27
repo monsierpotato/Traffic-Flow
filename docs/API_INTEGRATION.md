@@ -44,7 +44,8 @@ Copy `.env.example` thành `.env`. Các biến quan trọng:
 
 ```env
 AI_LOCAL=true
-AI_MODEL_PATH=models/yolov8n.pt
+AI_MODEL_DIR=inference/models
+AI_MODEL_PATH=yolov8n.pt
 REDIS_URL=redis://127.0.0.1:6379/0
 MONGODB_LOCAL_FALLBACK=true
 CALLBACK_HOST=http://127.0.0.1:8000

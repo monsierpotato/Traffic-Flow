@@ -3,6 +3,8 @@ from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
+from shared.runtime_paths import resolve_model_path
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -74,7 +76,8 @@ class Settings(BaseSettings):
     # explicit compatibility fallback for deployments that set AI_LOCAL=false.
     AI_LOCAL: bool = Field(default=True)
     AI_SERVING_URL: str = Field(default="https://tienpm205--trafficflow-inference-fastapi-app.modal.run")
-    AI_MODEL_PATH: str = Field(default="models/yolov8n.pt")
+    AI_MODEL_DIR: str = Field(default="inference/models")
+    AI_MODEL_PATH: str = Field(default="yolov8n.pt")
     AI_DEVICE: str = Field(default="0")
     AI_IMGSZ: int = Field(default=640)
     AI_HALF: bool = Field(default=True)
@@ -104,6 +107,9 @@ class Settings(BaseSettings):
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    def resolved_model_path(self) -> str:
+        return resolve_model_path(self.AI_MODEL_PATH, self.AI_MODEL_DIR)
 
 # Global settings instance
 settings = Settings()

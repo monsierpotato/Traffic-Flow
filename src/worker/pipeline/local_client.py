@@ -59,7 +59,7 @@ class LocalInferenceClient:
         from tfengine.core_ai import YoloByteTrackDetector
         device = _detect_device()
         self._detector = YoloByteTrackDetector(
-            model_path=model_path or settings.AI_MODEL_PATH,
+            model_path=model_path or settings.resolved_model_path(),
             confidence=confidence if confidence is not None else settings.AI_CONFIDENCE,
             device=device,
             imgsz=imgsz or settings.AI_IMGSZ,

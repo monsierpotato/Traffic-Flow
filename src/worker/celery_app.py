@@ -220,7 +220,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         )
         # Use local YOLO when AI_LOCAL=true, otherwise Modal GPU
         if os.environ.get("AI_LOCAL", "").lower() in ("1", "true", "yes") or settings.AI_LOCAL:
-            logger.info(f"Using LOCAL YOLO GPU inference | model={settings.AI_MODEL_PATH} imgsz={settings.AI_IMGSZ} half={settings.AI_HALF}")
+            logger.info(f"Using LOCAL YOLO GPU inference | model={settings.resolved_model_path()} imgsz={settings.AI_IMGSZ} half={settings.AI_HALF}")
             ai_client = LocalInferenceClient(max_workers=1)
         else:
             ai_client = InferenceClient(
@@ -395,7 +395,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
 
         bresult = BenchmarkResult(
             task_id=task_id,
-            model_path=settings.AI_MODEL_PATH,
+            model_path=settings.resolved_model_path(),
             device="cuda:0" if settings.AI_DEVICE != "cpu" else "cpu",
             imgsz=settings.AI_IMGSZ,
             half=settings.AI_HALF,

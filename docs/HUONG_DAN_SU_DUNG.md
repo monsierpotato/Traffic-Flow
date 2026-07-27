@@ -79,7 +79,8 @@ PYTHONPATH=src .venv/bin/python scripts/check_connections.py
 
 ```env
 AI_LOCAL=true
-AI_MODEL_PATH=models/yolov8n.pt
+AI_MODEL_DIR=inference/models
+AI_MODEL_PATH=yolov8n.pt
 REDIS_URL=redis://127.0.0.1:6379/0
 CALLBACK_HOST=http://127.0.0.1:8000
 MONGODB_LOCAL_FALLBACK=true
@@ -127,7 +128,7 @@ src/worker/    Celery task, local inference, tracking, render và counting
 src/tfengine/  AI/runtime engine dùng chung
 frontend/      React + Vite
 scripts/       preflight, native orchestrator và connection checks
-models/        local weights, không commit
+inference/models/ local weights dùng chung cho serving và worker, không commit
 storage/       uploads, previews, chunks và results local
 ```
 
@@ -135,7 +136,7 @@ storage/       uploads, previews, chunks và results local
 
 | Hiện tượng | Cách kiểm tra |
 |---|---|
-| Preflight báo thiếu model | Kiểm tra `AI_MODEL_PATH`, tải weights vào `models/` |
+| Preflight báo thiếu model | Kiểm tra `AI_MODEL_DIR`/`AI_MODEL_PATH`, tải weights vào `inference/models/` |
 | Worker bị `BLOCKED` | Kiểm tra Redis 6379, Celery import và model import |
 | Submit trả `503` | Queue chưa sẵn sàng; chạy Redis native rồi khởi động lại worker |
 | MongoDB không kết nối | Dùng local fallback hoặc kiểm tra `MONGODB_URI` |
