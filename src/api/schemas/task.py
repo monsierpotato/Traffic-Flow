@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -27,8 +27,8 @@ class VehicleCountDetail(BaseModel):
     direction: str
 
 class TaskProgressCallback(BaseModel):
-    status: str = Field(..., description="'processing' or 'completed' or 'failed'")
-    progress: int = Field(..., description="0-100 progress percentage")
+    status: Literal["pending", "processing", "completed", "failed"]
+    progress: int = Field(..., ge=0, le=100, description="0-100 progress percentage")
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     result_video_url: Optional[str] = None

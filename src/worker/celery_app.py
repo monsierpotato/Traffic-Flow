@@ -13,7 +13,7 @@ from shared.config import settings
 from shared.r2_client import r2_client
 from worker.pipeline.ai_client import InferenceClient
 from worker.pipeline.local_client import LocalInferenceClient
-from worker.pipeline.processor import FrameProcessor, FrameTransform
+from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space
 from worker.pipeline.tracker import LocalTracker
 from worker.pipeline.renderer import FrameRenderer
 from worker.pipeline.profiler import PipelineProfiler, BenchmarkResult
@@ -109,10 +109,26 @@ def _download_video_to_path(url: str, destination_path: str) -> float:
 def process_video(task_id: str, video_url: str, lane_config: dict, callback_url: str):
     temp_video_path = None
     temp_out_path = None
+    cap = None
     ai_client: InferenceClient = None
     out_video = None
     task_start = time.perf_counter()
     profiler = PipelineProfiler()
+
+    def close_ai_client() -> None:
+        nonlocal ai_client
+        client = ai_client
+        ai_client = None
+        if client is None:
+            return
+        try:
+            client.delete_session()
+        except Exception:
+            logger.warning("Could not close AI session for task %s", task_id, exc_info=True)
+        try:
+            client.shutdown()
+        except Exception:
+            logger.warning("Could not shut down AI client for task %s", task_id, exc_info=True)
 
     try:
         _send_callback(callback_url, {
@@ -161,12 +177,37 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         if not lanes_source:
             raise ValueError("No lanes in lane_config")
 
+        geometry_space = resolve_geometry_space(lane_config)
+        lanes_processing = lanes_source
+        if use_detection_crop and geometry_space == "source_frame":
+            lanes_processing = FrameTransform(
+                full_w=width,
+                full_h=height,
+                crop_w=out_w,
+                crop_h=out_h,
+                ai_w=settings.ROI_INPUT_SIZE,
+                ai_h=settings.ROI_INPUT_SIZE,
+                offset_x=crop_rect[0],
+                offset_y=crop_rect[1],
+            ).shift_lanes_to_crop(lanes_source)
+        logger.info(
+            "Batch geometry normalized: task=%s geometry_space=%s processing_size=%sx%s lanes=%s",
+            task_id,
+            geometry_space,
+            out_w,
+            out_h,
+            len(lanes_processing),
+        )
+
         # Polygon mask (source → cropped coords)
         poly_pts = lane_config.get("roi_polygon", [])
         poly_mask = None
         if poly_pts and len(poly_pts) >= 3 and use_detection_crop:
             src = np.array(poly_pts, dtype=np.float32).reshape(-1, 2)
-            poly_mask = (src - [crop_rect[0], crop_rect[1]]).astype(np.int32)
+            if geometry_space == "source_frame":
+                poly_mask = (src - [crop_rect[0], crop_rect[1]]).astype(np.int32)
+            else:
+                poly_mask = src.astype(np.int32)
             outside_poly = [tuple(map(float, p)) for p in poly_mask if p[0] < 0 or p[1] < 0 or p[0] > out_w or p[1] > out_h]
             if outside_poly:
                 logger.warning("roi_polygon has points outside processing ROI after shift: %s", outside_poly[:5])
@@ -191,8 +232,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        counter = CountingState(lanes_source)
-        renderer = FrameRenderer(lanes_source, settings_obj=settings)
+        counter = CountingState(lanes_processing)
+        renderer = FrameRenderer(lanes_processing, settings_obj=settings)
 
         # Stabilisation reference frame
         if settings.AI_ENABLE_STABILIZATION:
@@ -215,6 +256,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         temp_out_path = f_out.name; f_out.close()
         fourcc = cv2.VideoWriter_fourcc(*"vp90")
         out_video = cv2.VideoWriter(temp_out_path, fourcc, fps, (out_w, out_h))
+        if not out_video.isOpened():
+            raise RuntimeError(f"Could not open output video writer for {out_w}x{out_h} at {fps:.2f} FPS")
 
         # --- Process frames ---
         frame_idx = 0
@@ -306,8 +349,10 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             frame_idx += 1
 
         cap.release()
+        cap = None
         if out_video is not None:
             out_video.release()
+            out_video = None
         if pending_future is not None:
             try:
                 raw = pending_future.result(timeout=30)
@@ -327,8 +372,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             except Exception:
                 pass
 
-        ai_client.delete_session()
-        ai_client.shutdown()
+        close_ai_client()
         profiler.stop_resource_sampler()
         logger.info(f"Done: {processed} AI frames, {counter.get_total_count()} vehicles")
 
@@ -386,16 +430,18 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Upload result ---
         statistics = counter.get_statistics()
         diagnostics = counter.get_diagnostics()
-        result_url = None
-        if temp_out_path and os.path.exists(temp_out_path):
-            try:
-                _send_callback(callback_url, {
-                    "status": "processing", "progress": 98,
-                    "stage": "uploading_result", "stage_detail": "Uploading rendered result video",
-                })
-                result_url = r2_client.upload_path(temp_out_path, f"results/{task_id}.mp4", "video/mp4")
-            except Exception as e:
-                logger.error(f"Upload failed: {e}")
+        if not temp_out_path or not os.path.exists(temp_out_path):
+            raise RuntimeError("Rendered output video was not created")
+        _send_callback(callback_url, {
+            "status": "processing", "progress": 98,
+            "stage": "uploading_result", "stage_detail": "Uploading rendered result video",
+        })
+        try:
+            result_url = r2_client.upload_path(temp_out_path, f"results/{task_id}.mp4", "video/mp4")
+        except Exception as exc:
+            raise RuntimeError(f"Could not upload rendered result video: {exc}") from exc
+        if not result_url:
+            raise RuntimeError("Result storage returned an empty URL")
 
         _send_callback(callback_url, {
             "status": "completed",
@@ -415,16 +461,20 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
 
     except Exception as e:
         logger.error(f"Task {task_id} FAILED: {e}", exc_info=True)
-        if ai_client:
-            ai_client.delete_session()
-            ai_client.shutdown()
-            _send_callback(callback_url, {
-                "status": "failed", "progress": 0, "error_message": str(e),
-                "stage": "failed", "stage_detail": str(e),
-            })
+        close_ai_client()
+        _send_callback(callback_url, {
+            "status": "failed", "progress": 0, "error_message": str(e),
+            "stage": "failed", "stage_detail": str(e),
+        })
         return {"status": "failed", "task_id": task_id, "error": str(e)}
 
     finally:
+        if cap is not None:
+            cap.release()
+        if out_video is not None:
+            out_video.release()
+        close_ai_client()
+        profiler.stop_resource_sampler()
         for p in (temp_video_path, temp_out_path):
             if p and os.path.exists(p):
                 try:

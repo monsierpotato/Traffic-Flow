@@ -111,9 +111,8 @@ async def compat_submit(request: Request, payload: dict):
         )
 
     try:
-        from fastapi import BackgroundTasks
         req = TaskCreateRequest(video_id=video_id)
-        resp = await process_task(req, request, background_tasks=BackgroundTasks(), db=db)
+        resp = await process_task(req, request, db=db)
         return {"task_id": resp.task_id, "status": resp.status, "progress": 0}
     except HTTPException:
         raise

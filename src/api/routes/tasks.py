@@ -1,15 +1,11 @@
 from datetime import datetime
-import asyncio
 import os
-import urllib.request
 import logging
-from typing import Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
-from shared.database import get_database, db_instance
+from typing import Dict, List
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from shared.database import get_database
 from shared.config import settings
 from worker.celery_app import celery_app
-from shared.r2_client import r2_client
-from api.services.video_service import crop_video
 from api.schemas.task import (
     TaskCreateRequest,
     TaskCreateResponse,
@@ -47,10 +43,9 @@ def _public_lane_config(lane_config: dict | None) -> dict | None:
 async def process_task(
     payload: TaskCreateRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     db = Depends(get_database)
 ):
-    """Triggers the video processing task, crops video, and enqueues it in Celery."""
+    """Validate the configured task and enqueue it in Celery."""
     task = await db.tasks.find_one({"video_id": payload.video_id})
     if not task:
         raise HTTPException(
@@ -109,6 +104,14 @@ async def process_task(
         }
     )
 
+    geometry_space = lane_config.get("geometry_space")
+    if geometry_space is None:
+        geometry_space = (
+            "crop_local"
+            if lane_config.get("crop_rect_padded") or lane_config.get("processing_width")
+            else "source_frame"
+        )
+
     serializable_config = {
         "version": lane_config.get("version", 1),
         "camera_id": lane_config.get("camera_id"),
@@ -116,7 +119,7 @@ async def process_task(
         "roi_polygon": lane_config.get("roi_polygon"),
         "processing_roi": lane_config.get("processing_roi"),
         "annotation_roi": lane_config.get("annotation_roi"),
-        "geometry_space": lane_config.get("geometry_space", "source_frame"),
+        "geometry_space": geometry_space,
         "method": lane_config.get("method", "counting_gate"),
         "settings": lane_config.get("settings"),
         "lanes": lane_config.get("lanes", []),

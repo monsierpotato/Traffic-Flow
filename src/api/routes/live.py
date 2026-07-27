@@ -194,9 +194,13 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
 @router.post("/resolve")
 async def resolve_live_source(payload: LiveSourceResolve):
     original_url = payload.url.strip()
-    resolved_url = _resolve_youtube_url(original_url) if _is_youtube_url(original_url) else original_url
+    resolved_url = (
+        await asyncio.to_thread(_resolve_youtube_url, original_url)
+        if _is_youtube_url(original_url)
+        else original_url
+    )
     source_id = str(uuid.uuid4())
-    snapshot = _capture_snapshot(resolved_url, source_id)
+    snapshot = await asyncio.to_thread(_capture_snapshot, resolved_url, source_id)
     source = {
         "source_id": source_id,
         "original_url": original_url,
@@ -215,7 +219,7 @@ async def refresh_live_snapshot(source_id: str):
     source = LIVE_SOURCES.get(source_id)
     if not source:
         raise HTTPException(404, "Live source not found")
-    snapshot = _capture_snapshot(source["resolved_url"], source_id)
+    snapshot = await asyncio.to_thread(_capture_snapshot, source["resolved_url"], source_id)
     source.update(snapshot)
     source["updated_at"] = time.time()
     return {k: v for k, v in source.items() if k != "preview_path"}

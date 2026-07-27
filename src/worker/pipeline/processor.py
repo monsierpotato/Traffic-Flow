@@ -1,12 +1,41 @@
 """Frame processing pipeline: stabilize → crop → mask → letterbox 640×640 → JPEG encode."""
 
 from dataclasses import dataclass
-from typing import Tuple, Optional, List
+from typing import Optional, Tuple
 import cv2
 import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
+
+GEOMETRY_SPACES = {"source_frame", "crop_local"}
+
+
+def resolve_geometry_space(config: dict) -> str:
+    """Resolve the coordinate space used by a lane configuration.
+
+    New clients should send ``geometry_space`` explicitly. Older saved configs
+    that carry crop dimensions used crop-local points, so retain that narrow
+    compatibility inference instead of silently assuming the wrong space.
+    """
+
+    geometry_space = config.get("geometry_space")
+    if geometry_space is None:
+        geometry_space = (
+            "crop_local"
+            if config.get("crop_rect_padded") or config.get("processing_width")
+            else "source_frame"
+        )
+    if geometry_space not in GEOMETRY_SPACES:
+        raise ValueError(f"Unsupported geometry coordinate space: {geometry_space}")
+    return geometry_space
+
+
+def shift_points_to_crop(points: list, crop_rect: Tuple[int, int, int, int]) -> list:
+    """Translate points from source-frame coordinates into crop-local space."""
+
+    offset_x, offset_y = crop_rect[0], crop_rect[1]
+    return [[point[0] - offset_x, point[1] - offset_y] for point in points]
 
 
 @dataclass
@@ -55,10 +84,10 @@ class FrameTransform:
             shifted = dict(lane)
             for key in ("valid_zone", "counting_line", "direction"):
                 if key in shifted and shifted[key]:
-                    shifted[key] = [
-                        [p[0] - self.offset_x, p[1] - self.offset_y]
-                        for p in shifted[key]
-                    ]
+                    shifted[key] = shift_points_to_crop(
+                        shifted[key],
+                        (self.offset_x, self.offset_y, self.offset_x + self.crop_w, self.offset_y + self.crop_h),
+                    )
             result.append(shifted)
         return result
 

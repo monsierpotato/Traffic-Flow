@@ -704,6 +704,20 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
   const [liveSession, setLiveSession] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
+  const liveSessionRef = useRef(null);
+
+  useEffect(() => {
+    liveSessionRef.current = liveSession;
+  }, [liveSession]);
+
+  useEffect(() => () => {
+    const sessionId = liveSessionRef.current?.session_id;
+    if (sessionId) {
+      removeLive(sessionId).catch(() => {
+        // The backend may already have removed a stopped/failed session.
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (sourceMode === "live") return undefined;
@@ -1146,6 +1160,7 @@ function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile }) {
       height: round(crop.sourceRect.height),
       purpose: "inference_processing",
     },
+    geometry_space: "source_frame",
     annotation_roi: {
       type: "rectangle",
       x: round(crop.sourceRect.x),

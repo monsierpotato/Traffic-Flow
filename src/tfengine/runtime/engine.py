@@ -109,6 +109,8 @@ class TrafficFlowEngine:
                 fps,
                 (width, height),
             )
+            if not writer.isOpened():
+                raise RuntimeError(f"Could not open output video writer: {request.output_video_path}")
 
         jsonl_handle = None
         if request.output_jsonl_path:
