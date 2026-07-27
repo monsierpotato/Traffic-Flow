@@ -2,7 +2,7 @@
 
 Hệ thống phân tích giao thông bằng video: phát hiện, theo dõi và đếm xe theo từng làn đường. Người dùng upload video giao thông hoặc kết nối luồng trực tiếp (YouTube/HLS), vẽ vùng giám sát — hệ thống tự động trả về video có overlay và bảng thống kê số lượng xe theo làn, loại xe và hướng di chuyển.
 
-Dự án nhóm 5 thành viên, hiện ưu tiên chạy native bằng Node.js + Python trên máy local. Docker/Compose được giữ lại như artifact lịch sử, không còn là đường chạy mặc định.
+Dự án nhóm 5 thành viên, chạy native bằng Node.js + Python trên máy local. Docker/Compose không còn là một phần của project.
 
 ---
 
@@ -200,7 +200,7 @@ Mở trình duyệt: **http://127.0.0.1:5173**. API chạy tại **http://127.0.
 
 Yêu cầu tối thiểu: Node.js 20+, Python 3.10+, FFmpeg và FFprobe. MongoDB không bắt buộc ở local vì có JSON fallback; Redis và model weights là bắt buộc cho batch inference thật.
 
-Hướng dẫn native chi tiết: **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**. Tài liệu Docker cũ vẫn được giữ để tham chiếu lịch sử, nhưng không dùng cho luồng phát triển hiện tại.
+Hướng dẫn native chi tiết: **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**.
 
 ---
 

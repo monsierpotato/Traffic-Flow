@@ -51,8 +51,7 @@ CALLBACK_HOST=http://127.0.0.1:8000
 ```
 
 Đường chạy native dùng `CALLBACK_HOST=http://127.0.0.1:8000` và Redis native tại
-`127.0.0.1:6379`. Docker/Compose chỉ còn là tài liệu legacy, không được gọi bởi
-orchestrator hiện tại. File `.env` phải cấu hình secret thật trước khi dùng
+`127.0.0.1:6379`. File `.env` phải cấu hình secret thật trước khi dùng
 MongoDB Atlas/R2.
 
 ## Error contract

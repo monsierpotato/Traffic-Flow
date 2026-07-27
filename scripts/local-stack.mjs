@@ -17,11 +17,11 @@ if (!existsSync(python)) {
 const env = {
   ...process.env,
   PYTHONPATH: resolve(root, "src"),
-  AI_LOCAL: process.env.AI_LOCAL ?? "true",
-  CALLBACK_HOST: process.env.CALLBACK_HOST ?? "http://127.0.0.1:8000",
-  REDIS_URL: process.env.REDIS_URL ?? "redis://127.0.0.1:6379/0",
-  CELERY_QUEUE_NAME: process.env.CELERY_QUEUE_NAME ?? "trafficflow_gpu_queue",
-  CORS_ORIGINS: process.env.CORS_ORIGINS ?? "http://127.0.0.1:5173",
+  AI_LOCAL: envValue("AI_LOCAL", "true"),
+  CALLBACK_HOST: envValue("CALLBACK_HOST", "http://127.0.0.1:8000"),
+  REDIS_URL: envValue("REDIS_URL", "redis://127.0.0.1:6379/0"),
+  CELERY_QUEUE_NAME: envValue("CELERY_QUEUE_NAME", "trafficflow_gpu_queue"),
+  CORS_ORIGINS: envValue("CORS_ORIGINS", "http://127.0.0.1:5173"),
 };
 
 const children = [];
@@ -72,7 +72,7 @@ function spawnService([name, command, args]) {
   return child;
 }
 
-console.log("TrafficFlow local stack started without Docker:");
+console.log("TrafficFlow native local stack started:");
 console.log("  frontend: http://127.0.0.1:5173");
 console.log("  API:      http://127.0.0.1:8000/health");
 console.log(`  worker:   ${commands.some(([name]) => name === "worker") ? "running" : "blocked"}`);
@@ -127,16 +127,18 @@ function redisEndpoint(redisUrl) {
 }
 
 function envModelPath() {
-  const fromProcess = process.env.AI_MODEL_PATH;
-  if (fromProcess) return fromProcess;
+  return envValue("AI_MODEL_PATH", "models/yolov8n.pt");
+}
+
+function envValue(key, fallback) {
+  if (process.env[key]) return process.env[key];
   try {
     const dotenv = readFileSync(resolve(root, ".env"), "utf8");
-    const match = dotenv.match(/^AI_MODEL_PATH\s*=\s*(.+)$/m);
-    if (match) return match[1].trim().replace(/^['\"]|['\"]$/g, "");
+    const match = dotenv.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, "m"));
+    return match?.[1]?.trim().replace(/^['\"]|['\"]$/g, "") || fallback;
   } catch {
-    // .env is optional.
+    return fallback;
   }
-  return "models/yolov8n.pt";
 }
 
 function hasWorkerRuntime() {

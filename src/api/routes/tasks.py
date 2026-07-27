@@ -88,7 +88,7 @@ async def process_task(
             detail="No lane configuration found. Please post config first."
         )
 
-    # Use CALLBACK_HOST for Docker compatibility; fallback to request.base_url
+    # Keep callbacks explicit for the native worker; fallback to the request URL.
     callback_host = getattr(settings, "CALLBACK_HOST", None) or os.environ.get("CALLBACK_HOST", "")
     if callback_host:
         callback_url = f"{callback_host.rstrip('/')}/api/v1/tasks/progress/{task_id}"

@@ -55,6 +55,6 @@ npm run dev:worker
 
 `dev:worker` chỉ dùng sau khi Redis native và model weights đã sẵn sàng.
 
-## Docker
-
-`Dockerfile`, `docker-compose.yml` và các tài liệu Docker cũ hiện không thuộc đường chạy mặc định. Không xóa chúng trong refactor này để giữ khả năng đối chiếu benchmark/lịch sử; khi team xác nhận bỏ hẳn, có thể xóa ở một migration riêng.
+Docker/Compose đã được loại khỏi project. Luồng phát triển và chạy local chỉ dùng
+Node.js orchestrator, Python `.venv`, Redis native và các dịch vụ phụ thuộc được
+cấu hình trong `.env`.

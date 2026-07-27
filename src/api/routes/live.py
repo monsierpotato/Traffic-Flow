@@ -81,7 +81,7 @@ def _resolve_youtube_url(url: str) -> str:
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=45)
     except FileNotFoundError as exc:
-        raise HTTPException(500, "yt-dlp is not installed in the API container/environment") from exc
+        raise HTTPException(500, "yt-dlp is not installed in the API environment") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()[-1200:]
         raise HTTPException(422, f"Could not resolve YouTube URL with yt-dlp: {detail}") from exc
@@ -109,7 +109,7 @@ def _capture_snapshot(source_url: str, source_id: str) -> dict:
     cap = cv2.VideoCapture(source_url)
     try:
         if not cap.isOpened():
-            raise HTTPException(422, "OpenCV could not open this source URL from the backend container")
+            raise HTTPException(422, "OpenCV could not open this source URL from the backend process")
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
