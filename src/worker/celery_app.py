@@ -35,7 +35,7 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_ignore_result=True,
-    task_store_errors_even_if_ignored=False,
+    task_store_errors_even_if_ignored=True,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     task_track_started=True,
@@ -222,9 +222,24 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             enable_stabilization=settings.AI_ENABLE_STABILIZATION,
         )
         # Use local YOLO when AI_LOCAL=true, otherwise Modal GPU
-        if os.environ.get("AI_LOCAL", "").lower() in ("1", "true", "yes") or settings.AI_LOCAL:
-            logger.info(f"Using LOCAL YOLO GPU inference | model={settings.resolved_model_path()} imgsz={settings.AI_IMGSZ} half={settings.AI_HALF}")
-            ai_client = LocalInferenceClient(max_workers=1)
+        use_local_ai = os.environ.get("AI_LOCAL", "").lower() in ("1", "true", "yes") or settings.AI_LOCAL
+        if use_local_ai:
+            logger.info(
+                "Using LOCAL YOLO inference | model=%s imgsz=%s half=%s",
+                settings.resolved_model_path(), settings.AI_IMGSZ, settings.AI_HALF,
+            )
+            try:
+                ai_client = LocalInferenceClient(max_workers=1)
+            except RuntimeError as exc:
+                # Keep the API/worker install usable without the optional GPU
+                # bundle. Remote inference is the explicit compatibility path
+                # and is already configured by AI_SERVING_URL.
+                logger.warning("Local inference unavailable (%s); falling back to remote serving", exc)
+                ai_client = InferenceClient(
+                    base_url=settings.AI_SERVING_URL,
+                    max_workers=2,
+                    request_timeout=30,
+                )
         else:
             ai_client = InferenceClient(
                 base_url=settings.AI_SERVING_URL,
@@ -473,7 +488,10 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             "status": "failed", "progress": 0, "error_message": str(e),
             "stage": "failed", "stage_detail": str(e),
         })
-        return {"status": "failed", "task_id": task_id, "error": str(e)}
+        # Preserve the failure in Celery as well as in the API callback. A
+        # returned error dict would make the broker consider this task
+        # successful and would hide worker failures from monitoring.
+        raise
 
     finally:
         if cap is not None:

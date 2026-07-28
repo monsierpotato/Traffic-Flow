@@ -1,6 +1,6 @@
 @echo off
 echo Starting Celery worker...
 echo Note: Using --pool=solo because Celery prefork is not fully supported on Windows.
-.venv\Scripts\celery.exe -A backend.core.celery_app worker --pool=solo -l info
+set PYTHONPATH=src
+.venv\Scripts\celery.exe -A worker.celery_app worker --pool=solo --concurrency=1 -l info
 pause
-
