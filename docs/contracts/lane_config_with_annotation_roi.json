@@ -21,6 +21,7 @@
     "height": 400,
     "purpose": "legacy_processing_roi"
   },
+  "geometry_space": "source_frame",
   "method": "counting_gate",
   "settings": {
     "movement_threshold_px": 5,

@@ -1,39 +1,54 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import redis
 from shared.config import settings
-from shared.database import connect_to_mongo, close_mongo_connection
+from shared import database
 from api.routes.router import v1_router
-from api.services.cleanup_service import run_data_cleanup
+from api.services import cleanup_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Scheduler for the data retention cleanup task
-scheduler = AsyncIOScheduler()
+
+async def _scheduled_cleanup() -> None:
+    """Stable scheduler entrypoint; keeps the service dependency patchable in tests."""
+    await cleanup_service.run_data_cleanup()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
-    await connect_to_mongo()
+    await database.connect_to_mongo()
     
     # Start the data cleanup background scheduler
     # Runs the cleanup job once every hour
-    scheduler.add_job(run_data_cleanup, 'interval', hours=1, id='data_cleanup')
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        _scheduled_cleanup,
+        "interval",
+        hours=1,
+        id="data_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
+    app.state.cleanup_scheduler = scheduler
     logger.info("Data cleanup background scheduler started.")
-    
-    yield
-    
-    # --- Shutdown ---
-    scheduler.shutdown()
-    logger.info("Data cleanup background scheduler stopped.")
-    await close_mongo_connection()
+
+    try:
+        yield
+    finally:
+        # --- Shutdown ---
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+        logger.info("Data cleanup background scheduler stopped.")
+        await database.close_mongo_connection()
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -46,7 +61,7 @@ def create_app() -> FastAPI:
     # CORS configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Adjust for production security
+        allow_origins=settings.cors_origin_list(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -54,7 +69,9 @@ def create_app() -> FastAPI:
 
     # Mount static files for local storage mockup (R2 mock)
     # If the local storage mock is enabled, we serve it under /static
-    app.mount("/static", StaticFiles(directory="storage"), name="static")
+    storage_dir = Path(settings.STORAGE_DIR)
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
     logger.info("Mounted static directory 'storage' at '/static'")
 
     # Include V1 API Router
@@ -65,6 +82,36 @@ def create_app() -> FastAPI:
     from api.routes.live import router as live_router
     app.include_router(compat_router)
     app.include_router(live_router, prefix="/live", tags=["Live Compat"])
+
+    @app.get("/health", tags=["System"])
+    async def health():
+        return {"status": "ok", "service": "trafficflow-api"}
+
+    @app.get("/ready", tags=["System"])
+    async def ready():
+        if database.db_instance.db is None:
+            return JSONResponse(status_code=503, content={"status": "not_ready", "database": "disconnected"})
+        queue_ready = False
+        redis_client = None
+        try:
+            redis_client = redis.from_url(
+                settings.REDIS_URL,
+                socket_connect_timeout=settings.REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_timeout=settings.REDIS_CONNECT_TIMEOUT_SECONDS,
+            )
+            redis_client.ping()
+            queue_ready = True
+        except Exception:
+            logger.warning("Redis queue is not ready at %s", settings.REDIS_URL)
+        finally:
+            if redis_client is not None:
+                redis_client.close()
+        payload = {
+            "status": "ready" if queue_ready else "degraded",
+            "database": "local_json" if database.db_instance.using_local_fallback else "mongodb",
+            "queue": {"url": settings.REDIS_URL, "status": "ready" if queue_ready else "blocked"},
+        }
+        return payload if queue_ready else JSONResponse(status_code=503, content=payload)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -88,7 +135,6 @@ def create_app() -> FastAPI:
         return response
 
     # Serve built frontend static files
-    from pathlib import Path
     frontend_dist_dir = Path("frontend/dist")
     if frontend_dist_dir.exists():
         app.mount("/", StaticFiles(directory=str(frontend_dist_dir), html=True), name="frontend")

@@ -1,7 +1,6 @@
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from api.schemas.lane import LaneConfigRequest
 
 class TaskCreateRequest(BaseModel):
     video_id: str
@@ -28,8 +27,8 @@ class VehicleCountDetail(BaseModel):
     direction: str
 
 class TaskProgressCallback(BaseModel):
-    status: str = Field(..., description="'processing' or 'completed' or 'failed'")
-    progress: int = Field(..., description="0-100 progress percentage")
+    status: Literal["pending", "processing", "completed", "failed"]
+    progress: int = Field(..., ge=0, le=100, description="0-100 progress percentage")
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     result_video_url: Optional[str] = None
@@ -59,4 +58,7 @@ class TaskResultResponse(BaseModel):
     multi_lane_track_count: int = 0
     multi_lane_tracks: List[Dict[str, Any]] = Field(default_factory=list)
     processing_time_seconds: Optional[float] = None
-    lane_config: Optional[LaneConfigRequest] = None
+    # Result payloads may contain legacy lane configs that predate the strict
+    # create-request schema. Keep the read model tolerant and preserve the
+    # stored snapshot instead of rejecting an otherwise completed task.
+    lane_config: Optional[Dict[str, Any]] = None

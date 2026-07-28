@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TrafficFlow manual geometry counting engine.")
     parser.add_argument("--video", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--model", default="models/yolov8n.pt")
+    parser.add_argument("--model", default="yolov8n.pt")
     parser.add_argument("--device", default=None)
     parser.add_argument("--conf", default=0.25, type=float)
     parser.add_argument("--max-frames", type=int, help="Stop after this many frames for smoke tests.")

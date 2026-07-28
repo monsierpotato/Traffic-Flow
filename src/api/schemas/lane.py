@@ -1,4 +1,4 @@
-from typing import List, Optional, Any
+from typing import List, Literal, Optional, Any
 from pydantic import BaseModel, Field
 
 class Resolution(BaseModel):
@@ -34,6 +34,7 @@ class LaneConfigRequest(BaseModel):
     roi_polygon: List[List[float]]
     processing_roi: Optional[ProcessingROI] = None
     annotation_roi: Optional[ProcessingROI] = None
+    geometry_space: Optional[Literal["source_frame", "crop_local"]] = None
     method: str = "counting_gate"
     settings: Settings
     lanes: List[AdvancedLane]

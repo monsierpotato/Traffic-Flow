@@ -8,7 +8,7 @@ import json
 import math
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
@@ -31,10 +31,6 @@ PERF_FIELDS = [
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
-
-
-def _utc_iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
 def _write_json(path: Path, data: dict | list) -> None:
@@ -117,39 +113,6 @@ def _http_frame(url: str, timeout: float = 10.0) -> dict:
         }
 
 
-def _parse_percent(raw: str) -> float:
-    try:
-        return float(str(raw).strip().rstrip("%"))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _parse_size_mb(raw: str) -> float:
-    text = str(raw).strip()
-    if not text:
-        return 0.0
-    first = text.split("/")[0].strip().replace(" ", "")
-    units = [
-        ("GiB", 1024.0),
-        ("MiB", 1.0),
-        ("KiB", 1.0 / 1024.0),
-        ("GB", 1000.0),
-        ("MB", 1.0),
-        ("KB", 1.0 / 1000.0),
-        ("B", 1.0 / (1000.0 * 1000.0)),
-    ]
-    for suffix, factor in units:
-        if first.endswith(suffix):
-            try:
-                return float(first[: -len(suffix)]) * factor
-            except ValueError:
-                return 0.0
-    try:
-        return float(first)
-    except ValueError:
-        return 0.0
-
-
 def _nvidia_smi() -> dict:
     try:
         result = subprocess.run(
@@ -194,35 +157,10 @@ def _host_resources() -> dict:
     return data
 
 
-def _docker_stats(container: str) -> dict:
-    try:
-        result = subprocess.run(
-            ["docker", "stats", "--no-stream", "--format", "{{json .}}", container],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-            check=False,
-        )
-        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-        if result.returncode != 0 or not line:
-            return {}
-        row = json.loads(line)
-        return {
-            "api_container_cpu_pct": _parse_percent(row.get("CPUPerc", "")),
-            "api_container_mem_used_mb": round(_parse_size_mb(row.get("MemUsage", "")), 3),
-            "api_container_mem_pct": _parse_percent(row.get("MemPerc", "")),
-            "api_container_pids": int(row.get("PIDs", 0) or 0),
-        }
-    except Exception:
-        return {}
+def _resource_sample() -> dict:
+    """Sample resources from the native host running API and worker processes."""
 
-
-def _resource_sample(container: str) -> dict:
-    row = _host_resources()
-    row.update(_docker_stats(container))
-    return row
+    return _host_resources()
 
 
 def _flatten_status(row: dict) -> dict:
@@ -320,26 +258,16 @@ def _stall_metrics(rows: list[dict], warmup_s: float, threshold_s: float) -> dic
     }
 
 
-def _filtered_api_logs(container: str, since_ts: float) -> dict:
-    try:
-        result = subprocess.run(
-            ["docker", "logs", "--since", _utc_iso(since_ts), container],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=20,
-            check=False,
-        )
-        text = "\n".join(part for part in [result.stdout, result.stderr] if part)
-    except Exception as exc:
-        return {"error": str(exc), "lines": []}
-    interesting = []
-    for line in text.splitlines():
-        lower = line.lower()
-        if any(term in lower for term in ["reconnect", "reset", "input_gap", "last_error", "failed", "stale_frame"]):
-            interesting.append(line[-1000:])
-    return {"error": "", "lines": interesting[-300:]}
+def _native_log_signals(timeseries: list[dict]) -> dict:
+    """Extract error signals observed through the native live-session API."""
+
+    lines = []
+    for row in timeseries:
+        if row.get("last_error"):
+            lines.append(f"last_error: {row['last_error']}")
+        if row.get("dropped_reason"):
+            lines.append(f"dropped_reason: {row['dropped_reason']}")
+    return {"error": "", "lines": lines[-300:]}
 
 
 def _summarize(
@@ -403,9 +331,9 @@ def _summarize(
         "vram_peak_mb": round(max((float(row.get("vram_used_mb") or 0) for row in resources), default=0.0), 3),
         "host_ram_start_mb": round(float(resources[0].get("host_ram_used_mb") or 0), 3) if resources else 0.0,
         "host_ram_end_mb": round(float(resources[-1].get("host_ram_used_mb") or 0), 3) if resources else 0.0,
-        "api_container_mem_start_mb": round(float(resources[0].get("api_container_mem_used_mb") or 0), 3) if resources else 0.0,
-        "api_container_mem_end_mb": round(float(resources[-1].get("api_container_mem_used_mb") or 0), 3) if resources else 0.0,
-        "api_container_mem_peak_mb": round(max((float(row.get("api_container_mem_used_mb") or 0) for row in resources), default=0.0), 3),
+        "host_cpu_start_pct": round(float(resources[0].get("host_cpu_pct") or 0), 3) if resources else 0.0,
+        "host_cpu_end_pct": round(float(resources[-1].get("host_cpu_pct") or 0), 3) if resources else 0.0,
+        "host_cpu_peak_pct": round(max((float(row.get("host_cpu_pct") or 0) for row in resources), default=0.0), 3),
         "lane_volume_total": final_session.get("lane_volume_total", 0),
         "global_unique_count": final_session.get("global_unique_count", 0),
         "model_name": final_session.get("model_name", ""),
@@ -457,7 +385,7 @@ def _write_report(path: Path, summary: dict, output_dir: Path) -> None:
         f"| Unexpected tracker reset count from logs | {summary['unexpected_tracker_reset_count_from_logs']} |",
         f"| GPU util avg/p95 % | {summary['gpu_util_avg_pct']} / {summary['gpu_util_p95_pct']} |",
         f"| VRAM peak MB | {summary['vram_peak_mb']} |",
-        f"| API container RAM start/end/peak MB | {summary['api_container_mem_start_mb']} / {summary['api_container_mem_end_mb']} / {summary['api_container_mem_peak_mb']} |",
+        f"| Host CPU start/end/peak % | {summary['host_cpu_start_pct']} / {summary['host_cpu_end_pct']} / {summary['host_cpu_peak_pct']} |",
         f"| Operational lane volume total | {summary['lane_volume_total']} |",
         "",
         "## Artifacts",
@@ -528,7 +456,7 @@ def run(args: argparse.Namespace) -> dict:
                 }
             )
             timeseries.append(flat)
-            resource = _resource_sample(args.api_container)
+            resource = _resource_sample()
             resource.update(
                 {
                     "run_id": run_id,
@@ -560,7 +488,7 @@ def run(args: argparse.Namespace) -> dict:
                     _http_json("DELETE", f"{base}/live/sessions/{session_id}", timeout=30)
                 except Exception:
                     pass
-        api_log_signals = _filtered_api_logs(args.api_container, started_at)
+        api_log_signals = _native_log_signals(timeseries)
 
     _add_deltas(timeseries)
     summary = _summarize(
@@ -590,8 +518,6 @@ def run(args: argparse.Namespace) -> dict:
     resource_fields = [
         "run_id", "sample_index", "timestamp", "elapsed_s", "phase", "gpu_util_pct",
         "vram_used_mb", "vram_total_mb", "host_cpu_pct", "host_ram_used_mb",
-        "api_container_cpu_pct", "api_container_mem_used_mb", "api_container_mem_pct",
-        "api_container_pids",
     ]
     _write_csv(output / "live_runtime_timeseries.csv", timeseries, status_fields)
     _write_csv(output / "live_resource_timeseries.csv", resources, resource_fields)
@@ -630,8 +556,6 @@ def run(args: argparse.Namespace) -> dict:
         _write_report(args.reports_dir / "live_runtime_report.md", summary, output)
     if args.docs_report:
         _write_report(args.docs_report, summary, output)
-    if args.portfolio_report:
-        _write_report(args.portfolio_report, summary, output)
     if args.wiki_report:
         _write_report(args.wiki_report, summary, output)
     return {"output_dir": str(output).replace("\\", "/"), "summary": summary}
@@ -647,13 +571,11 @@ def main() -> None:
     parser.add_argument("--stall-threshold-s", type=float, default=15.0)
     parser.add_argument("--frame-skip", type=int, default=1)
     parser.add_argument("--api-base", default="http://localhost:8000")
-    parser.add_argument("--api-container", default="trafficflow-api-1")
     parser.add_argument("--resolve-timeout-s", type=float, default=60.0)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--reports-dir", type=Path, default=Path("benchmark/reports"))
-    parser.add_argument("--docs-report", type=Path, default=Path("docs/reports/phase-08-live-runtime.md"))
-    parser.add_argument("--portfolio-report", type=Path, default=Path("docs/portfolio/runtime-optimization-case-study.md"))
-    parser.add_argument("--wiki-report", type=Path, default=Path("docs/wiki/ai-workflow/phase-08-live-runtime.md"))
+    parser.add_argument("--docs-report", type=Path, default=None)
+    parser.add_argument("--wiki-report", type=Path, default=None)
     parser.add_argument("--allow-existing-output", action="store_true")
     args = parser.parse_args()
     print(json.dumps(run(args), indent=2, ensure_ascii=False))

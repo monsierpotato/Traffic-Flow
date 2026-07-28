@@ -46,7 +46,7 @@ def _color_meta(meta: VideoMeta) -> dict:
 
 
 def _save_local_preview(video_id: str, preview_bytes: bytes, request: Request) -> str:
-    local_preview_dir = Path("storage/previews")
+    local_preview_dir = Path(settings.STORAGE_DIR) / "previews"
     local_preview_dir.mkdir(parents=True, exist_ok=True)
     (local_preview_dir / f"{video_id}.jpg").write_bytes(preview_bytes)
     base_url = str(request.base_url).rstrip("/")

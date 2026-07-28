@@ -17,7 +17,7 @@ class R2Client:
         if self.is_mocked:
             logger.warning("Cloudflare R2 is configured with placeholders. Falling back to local filesystem storage mock!")
             # Define local storage paths
-            self.local_storage_dir = Path("storage")
+            self.local_storage_dir = Path(settings.STORAGE_DIR)
             self.local_storage_dir.mkdir(exist_ok=True)
             (self.local_storage_dir / "uploads").mkdir(exist_ok=True)
             (self.local_storage_dir / "previews").mkdir(exist_ok=True)

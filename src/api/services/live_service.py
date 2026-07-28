@@ -17,7 +17,7 @@ import numpy as np
 from shared.config import settings
 from worker.pipeline.ai_client import InferenceClient
 from worker.pipeline.local_client import LocalInferenceClient
-from worker.pipeline.processor import FrameProcessor, FrameTransform
+from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space, shift_points_to_crop
 from worker.pipeline.renderer import FrameRenderer
 from worker.pipeline.detection_filter import filter_detections_for_tracking
 from worker.pipeline.tracker import LocalTracker
@@ -501,15 +501,12 @@ class LiveSessionManager:
             )
 
             lanes_source = lane_config.get("lanes", [])
-            geometry_space = lane_config.get("geometry_space")
-            if geometry_space is None:
-                geometry_space = "crop_local" if (lane_config.get("crop_rect_padded") or lane_config.get("processing_width")) else "source_frame"
+            geometry_space = resolve_geometry_space(lane_config)
+            if lane_config.get("geometry_space") is None:
                 logger.warning(
                     "Live config has no geometry_space; inferred %s for backward compatibility: session=%s",
                     geometry_space, session.session_id,
                 )
-            if geometry_space not in {"source_frame", "crop_local"}:
-                raise ValueError(f"Unsupported geometry coordinate space: {geometry_space}")
             lanes_processing = lanes_source
             if use_detection_crop and lanes_source and geometry_space == "source_frame":
                 lanes_processing = FrameTransform(
@@ -526,7 +523,7 @@ class LiveSessionManager:
                 if geometry_space == "crop_local":
                     poly_mask = src.astype(np.int32)
                 else:
-                    poly_mask = (src - [crop_rect[0], crop_rect[1]]).astype(np.int32)
+                    poly_mask = np.array(shift_points_to_crop(poly_pts, crop_rect), dtype=np.int32)
 
             if lanes_processing:
                 sample = (lanes_source[0].get("valid_zone") or [[None, None]])[0]
@@ -570,7 +567,7 @@ class LiveSessionManager:
             last_tick = time.time()
             last_processed = 0
             frame_idx = 0
-            session.model_name = settings.AI_MODEL_PATH
+            session.model_name = settings.resolved_model_path()
             session.roi_mode = live_roi_mode
             session.ai_imgsz = settings.AI_IMGSZ
             session.status = "running"
@@ -819,5 +816,3 @@ def _counts_map(counter: CountingState, lanes: list) -> Dict[str, Dict[str, int]
 
 
 live_manager = LiveSessionManager()
-
-

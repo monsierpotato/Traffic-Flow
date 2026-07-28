@@ -1,15 +1,11 @@
 from datetime import datetime
-import asyncio
 import os
-import urllib.request
 import logging
-from typing import Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
-from shared.database import get_database, db_instance
+from typing import Dict, List
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from shared.database import get_database
 from shared.config import settings
 from worker.celery_app import celery_app
-from shared.r2_client import r2_client
-from api.services.video_service import crop_video
 from api.schemas.task import (
     TaskCreateRequest,
     TaskCreateResponse,
@@ -30,16 +26,26 @@ async def find_task(db, identifier: str):
         task = await db.tasks.find_one({"video_id": identifier})
     return task
 
+
+def _public_lane_config(lane_config: dict | None) -> dict | None:
+    """Return a JSON-safe read snapshot without Mongo-only metadata."""
+    if not lane_config:
+        return None
+    return {
+        key: value
+        for key, value in lane_config.items()
+        if key not in {"_id", "created_at", "updated_at"}
+    }
+
 # Removed background_crop_and_enqueue
 
 @router.post("/process", response_model=TaskCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def process_task(
     payload: TaskCreateRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     db = Depends(get_database)
 ):
-    """Triggers the video processing task, crops video, and enqueues it in Celery."""
+    """Validate the configured task and enqueue it in Celery."""
     task = await db.tasks.find_one({"video_id": payload.video_id})
     if not task:
         raise HTTPException(
@@ -77,7 +83,7 @@ async def process_task(
             detail="No lane configuration found. Please post config first."
         )
 
-    # Use CALLBACK_HOST for Docker compatibility; fallback to request.base_url
+    # Keep callbacks explicit for the native worker; fallback to the request URL.
     callback_host = getattr(settings, "CALLBACK_HOST", None) or os.environ.get("CALLBACK_HOST", "")
     if callback_host:
         callback_url = f"{callback_host.rstrip('/')}/api/v1/tasks/progress/{task_id}"
@@ -98,12 +104,22 @@ async def process_task(
         }
     )
 
+    geometry_space = lane_config.get("geometry_space")
+    if geometry_space is None:
+        geometry_space = (
+            "crop_local"
+            if lane_config.get("crop_rect_padded") or lane_config.get("processing_width")
+            else "source_frame"
+        )
+
     serializable_config = {
         "version": lane_config.get("version", 1),
         "camera_id": lane_config.get("camera_id"),
         "resolution": lane_config.get("resolution"),
         "roi_polygon": lane_config.get("roi_polygon"),
+        "processing_roi": lane_config.get("processing_roi"),
         "annotation_roi": lane_config.get("annotation_roi"),
+        "geometry_space": geometry_space,
         "method": lane_config.get("method", "counting_gate"),
         "settings": lane_config.get("settings"),
         "lanes": lane_config.get("lanes", []),
@@ -118,17 +134,37 @@ async def process_task(
     # Use working (1080p) copy for processing; fallback to original
     process_video_url = task.get("working_video_url") or task["video_url"]
 
-    celery_app.send_task(
-        "trafficflow.process_video",
-        args=[task_id, process_video_url, serializable_config, callback_url],
-        task_id=task_id,
-        queue=settings.CELERY_QUEUE_NAME,
-    )
+    try:
+        celery_app.send_task(
+            "trafficflow.process_video",
+            args=[task_id, process_video_url, serializable_config, callback_url],
+            task_id=task_id,
+            queue=settings.CELERY_QUEUE_NAME,
+        )
+    except Exception as exc:
+        logger.exception("Could not enqueue task %s", task_id)
+        await db.tasks.update_one(
+            {"task_id": task_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "progress": 0,
+                    "stage": "queue_unavailable",
+                    "stage_detail": "Redis/Celery worker is unavailable",
+                    "error_message": f"Worker queue unavailable: {exc.__class__.__name__}",
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Worker queue unavailable. Start native Redis and the Celery worker, then retry with a new upload.",
+        ) from exc
 
     return TaskCreateResponse(
         task_id=task_id,
         status="pending",
-        message="Task is being cropped and queued for processing."
+        message="Task queued for processing."
     )
 
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
@@ -159,9 +195,14 @@ async def get_task_status(
 async def task_progress_callback(
     task_id: str,
     payload: TaskProgressCallback,
+    request: Request,
     db = Depends(get_database)
 ):
     """Endpoint for Worker to report progress updates, failures, or completion."""
+    if settings.CALLBACK_TOKEN:
+        supplied = request.headers.get("authorization", "")
+        if supplied != f"Bearer {settings.CALLBACK_TOKEN}":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid callback token")
     task = await db.tasks.find_one({"task_id": task_id})
     if not task:
         raise HTTPException(
@@ -298,5 +339,5 @@ async def get_task_result(
         multi_lane_track_count=task.get("multi_lane_track_count") or 0,
         multi_lane_tracks=task.get("multi_lane_tracks") or [],
         processing_time_seconds=proc_time,
-        lane_config=lane_config
+        lane_config=_public_lane_config(lane_config)
     )
