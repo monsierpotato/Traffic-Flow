@@ -38,8 +38,8 @@ Ownership wording: the candidate led bottleneck analysis and AI-runtime validati
 
 ## Artifacts
 
-- `benchmark/reports/live_runtime_timeseries.csv`
-- `benchmark/reports/live_resource_timeseries.csv`
+- Public summary: [Phase 08 live runtime report](../reports/phase-08-live-runtime.md)
+- Local generated artifacts: live runtime time series and resource samples from the Phase 08 benchmark run
 - Run manifest: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/manifest.json`
 - Run summary: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/live_runtime_summary.json`
 - API log signal extract: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/api_log_signals.txt`

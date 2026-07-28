@@ -12,11 +12,7 @@ Show which technical decisions improved or weakened the pipeline, and document f
 
 ## Pham vi da hoan thanh
 
-- Generated `benchmark/reports/ablation_summary.csv`.
-- Generated `benchmark/reports/error_taxonomy.csv`.
-- Generated `benchmark/reports/phase09_error_examples.csv`.
-- Generated representative source-frame images under `benchmark/reports/phase09_error_frames/`.
-- Generated `benchmark/reports/ablation_report.md`.
+- Generated ablation summaries, error taxonomy rows, example traces, representative source-frame images, and a local detailed report under `benchmark/`.
 - Updated portfolio error analysis and limitations to reflect Phase 09 evidence.
 - Added wiki mirror and wiki log entry.
 
@@ -24,10 +20,10 @@ Show which technical decisions improved or weakened the pipeline, and document f
 
 | Area | Finding | Evidence |
 |---|---|---|
-| Tracker E2E | Direct ByteTrack beats the production re-tracker on held-out tracking/counting. | `benchmark/reports/end_to_end_summary.csv` |
-| ROI strategy | Formal full-frame vs crop-ROI accuracy ablation is blocked by missing frozen crop ROI GT for UA-DETRAC. | `benchmark/reports/ablation_summary.csv` |
-| Live scheduling | Current realtime latest-frame loop reached 14.895 FPS, 0 drops, frame-age p95 0.9 ms in a 30-minute soak. | `benchmark/reports/live_runtime_report.md` |
-| Detection | Small/occluded vehicles and `van -> truck` mapping remain major failure modes. | `benchmark/reports/error_taxonomy.csv` |
+| Tracker E2E | Direct ByteTrack beats the production re-tracker on held-out tracking/counting. | `docs/reports/end-to-end-bytetrack-production-comparison.md` |
+| ROI strategy | Formal full-frame vs crop-ROI accuracy ablation is blocked by missing frozen crop ROI GT for UA-DETRAC. | This report |
+| Live scheduling | Current realtime latest-frame loop reached 14.895 FPS, 0 drops, frame-age p95 0.9 ms in a 30-minute soak. | `docs/reports/phase-08-live-runtime.md` |
+| Detection | Small/occluded vehicles and `van -> truck` mapping remain major failure modes. | `docs/reports/phase-04-detection-benchmark.md` |
 
 ## Commands da chay
 
@@ -51,16 +47,14 @@ git diff --check
 - whitespace: `git diff --check` -> PASS, with Windows CRLF conversion warnings only.
 - wiki Obsidian links: PASS, 0 missing links.
 
-## Output
+## Public Evidence
 
-- `benchmark/reports/ablation_report.md`
-- `benchmark/reports/ablation_summary.csv`
-- `benchmark/reports/error_taxonomy.csv`
-- `benchmark/reports/phase09_error_examples.csv`
-- `benchmark/reports/phase09_error_frames/`
+- `docs/reports/phase-09-ablation-error-analysis.md`
 - `docs/portfolio/error-analysis.md`
 - `docs/portfolio/limitations.md`
 - `docs/wiki/ai-workflow/phase-09-ablation-error-analysis.md`
+
+Generated local artifacts included ablation reports, CSV summaries, error taxonomy rows, example traces, and representative frames under `benchmark/`.
 
 ## Acceptance criteria
 

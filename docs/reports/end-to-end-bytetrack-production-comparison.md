@@ -11,16 +11,14 @@ This report adds the production-relevance benchmark requested after Phase 04-06:
 - `bytetrack`: YOLOv8m + Ultralytics ByteTrack + lane/class filter + counting.
 - `trafficflow_production`: YOLOv8m + Ultralytics ByteTrack + lane/class filter + TrafficFlow `LocalTracker` Kalman re-tracker + counting.
 
-## Artifacts
+## Public Evidence
 
 - `benchmark/end_to_end_eval.py`
 - `tests/test_end_to_end_eval.py`
-- `benchmark/predictions/end_to_end/e2e-dev-bytetrack-vs-production-full-docker-gpu-20260718/`
-- `benchmark/predictions/end_to_end/e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718/`
-- `benchmark/reports/end_to_end_report.md`
-- `benchmark/reports/end_to_end_summary.csv`
 - `docs/reports/end-to-end-bytetrack-production-comparison.md`
 - `docs/wiki/ai-workflow/end-to-end-bytetrack-production-comparison.md`
+
+Generated local artifacts for this run included end-to-end predictions, `end_to_end_report.md`, and `end_to_end_summary.csv` under `benchmark/`.
 
 ## Headline
 

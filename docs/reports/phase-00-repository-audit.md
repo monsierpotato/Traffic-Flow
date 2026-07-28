@@ -112,7 +112,7 @@ docker compose config
 | Medium | `_parse_class_ids()` returned `None` before the parsing block, so `AI_CLASS_IDS=2,3,5,7` was not enforced in local YOLO inference. | `src/worker/pipeline/local_client.py`, `tests/test_api_integration.py` | Fixed and covered by a parser test. |
 | Medium | Local host Python is CPU-only (`torch 2.13.0+cpu`) even though GPU exists via `nvidia-smi`; formal benchmark should run in Docker GPU or a CUDA venv. | `benchmark/baseline/environment.json` | Open. Do not use host Python timing for portfolio metrics. |
 | Medium | `ffmpeg`/`ffprobe` are not in host PowerShell PATH. | command failure during audit | Open. Live host-run checks may fail outside Docker. |
-| Medium | Historical DETRAC benchmark exists, but it predates the new required split/protocol/manifest standard. | `docs/wiki/log.md`, `benchmark/reports/` | Open. Treat old numbers as historical only. |
+| Medium | Historical DETRAC benchmark exists, but it predates the new required split/protocol/manifest standard. | `docs/wiki/log.md`, generated local benchmark artifacts | Open. Treat old numbers as historical only. |
 | Low | README current live baseline is fresher than some older wiki benchmark notes; wiki needs future consolidation after benchmark phases. | `README.md`, `docs/wiki/log.md` | Open. Address in Phase 10 documentation pass. |
 
 ## Model inventory

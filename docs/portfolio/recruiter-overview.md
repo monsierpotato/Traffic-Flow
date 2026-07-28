@@ -8,11 +8,11 @@ TrafficFlow is a five-member team project for lane-level vehicle counting from u
 
 | Area | Result | Evidence |
 |---|---:|---|
-| Held-out detection | AP50 0.5820, recall 0.6791 | `benchmark/reports/detection_report.md` |
-| Held-out E2E counting, direct ByteTrack | Event F1 0.942238, WAPE 0.050360 | `benchmark/reports/end_to_end_report.md` |
-| Held-out E2E tracking, direct ByteTrack | HOTA 0.242433, IDF1 0.284952, IDSW 42 | `benchmark/reports/end_to_end_report.md` |
-| Uploaded-video runtime | 75.829 FPS, 3.033x real time | `benchmark/reports/batch_runtime_report.md` |
-| Live/HLS runtime | 14.895 FPS, frame age p95 0.9 ms, 0 dropped frames | `benchmark/reports/live_runtime_report.md` |
+| Held-out detection | AP50 0.5820, recall 0.6791 | [Phase 04 detection benchmark](../reports/phase-04-detection-benchmark.md) |
+| Held-out E2E counting, direct ByteTrack | Event F1 0.942238, WAPE 0.050360 | [End-to-end comparison](../reports/end-to-end-bytetrack-production-comparison.md) |
+| Held-out E2E tracking, direct ByteTrack | HOTA 0.242433, IDF1 0.284952, IDSW 42 | [End-to-end comparison](../reports/end-to-end-bytetrack-production-comparison.md) |
+| Uploaded-video runtime | 75.829 FPS, 3.033x real time | [Phase 07 upload runtime](../reports/phase-07-upload-runtime.md) |
+| Live/HLS runtime | 14.895 FPS, frame age p95 0.9 ms, 0 dropped frames | [Phase 08 live runtime](../reports/phase-08-live-runtime.md) |
 
 ## My Role
 

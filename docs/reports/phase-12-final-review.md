@@ -17,11 +17,12 @@ Check consistency, reproducibility, ownership wording, and recruiter readiness f
 - Reviewed scientific validity, engineering readiness, ownership wording, and recruiter readiness against the plan.
 - Refreshed final gate after Phase 09 partial-pass ablation/error-analysis.
 
-## File tạo mới
+## Public files created
 
-- `benchmark/reports/final_portfolio_report.md`
 - `docs/reports/phase-12-final-review.md`
 - `docs/portfolio/release-checklist.md`
+
+The generated final portfolio report was retained as a local benchmark artifact outside the curated public docs.
 
 ## File sửa đổi
 
@@ -49,11 +50,11 @@ git diff --check
 
 | Metric | Value | Run ID | Evidence |
 |---|---:|---|---|
-| Held-out detection AP50 / recall | 0.582020 / 0.679091 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `benchmark/reports/detection_report.md` |
-| Held-out E2E Event F1 / WAPE | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `benchmark/reports/end_to_end_report.md` |
-| Upload runtime FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `benchmark/reports/batch_runtime_report.md` |
-| Live runtime FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `benchmark/reports/live_runtime_report.md` |
-| Phase 09 ablation/error taxonomy | Partial pass; ROI accuracy ablation blocked | `phase09_analysis` | `benchmark/reports/ablation_report.md` |
+| Held-out detection AP50 / recall | 0.582020 / 0.679091 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `docs/reports/phase-04-detection-benchmark.md` |
+| Held-out E2E Event F1 / WAPE | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `docs/reports/end-to-end-bytetrack-production-comparison.md` |
+| Upload runtime FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `docs/reports/phase-07-upload-runtime.md` |
+| Live runtime FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `docs/reports/phase-08-live-runtime.md` |
+| Phase 09 ablation/error taxonomy | Partial pass; ROI accuracy ablation blocked | `phase09_analysis` | `docs/reports/phase-09-ablation-error-analysis.md` |
 
 ## Quyết định kỹ thuật
 
