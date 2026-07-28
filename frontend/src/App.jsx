@@ -724,9 +724,9 @@ function SideNav({ taskStatus, result, activeView, runtimeHealth, onNavigate }) 
 
 function NavItem({ icon, label, active = false, title, onClick }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={title} onClick={onClick}>
+    <button className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} aria-label={label} title={title} onClick={onClick}>
       <Icon name={icon} />
-      {label}
+      <span className="nav-label">{label}</span>
     </button>
   );
 }
