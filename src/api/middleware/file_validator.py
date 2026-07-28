@@ -6,6 +6,15 @@ def validate_video_file(file: UploadFile) -> UploadFile:
     """Validates the uploaded file size, extension and mime type."""
     # 1. Validate Extension
     filename = file.filename
+    if not filename or "\x00" in filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A safe video filename is required.",
+        )
+    # The original filename is metadata only; never allow path components to
+    # influence a storage key or temporary path.
+    file.filename = os.path.basename(filename)
+    filename = file.filename
     _, ext = os.path.splitext(filename.lower())
     if ext not in settings.ALLOWED_VIDEO_EXTENSIONS:
         raise HTTPException(
@@ -28,8 +37,6 @@ def validate_video_file(file: UploadFile) -> UploadFile:
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     chunk_size = 1024 * 1024  # 1MB
     size = 0
-    first_chunk = None
-
     # We read first chunk to validate magic bytes (MIME type)
     first_chunk = file.file.read(chunk_size)
     size += len(first_chunk)
@@ -45,11 +52,15 @@ def validate_video_file(file: UploadFile) -> UploadFile:
         import magic
         mime = magic.from_buffer(first_chunk, mime=True)
     except Exception:
-        # Fallback if magic/dll is not found on Windows
+        # Keep local development usable when libmagic is unavailable, but do
+        # not silently accept an unknown type as MP4.
         import mimetypes
         mime, _ = mimetypes.guess_type(filename)
         if mime is None:
-            mime = "video/mp4" # Default fallback guess
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Could not verify the uploaded video media type.",
+            )
 
     if not mime.startswith("video/") and mime not in [
         "application/octet-stream",  # Sometimes returned for raw containers like mkv/avi

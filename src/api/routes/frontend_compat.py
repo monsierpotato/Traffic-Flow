@@ -2,49 +2,31 @@
 
 import logging
 import os
-import tempfile
 from pathlib import Path
 from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from shared.database import get_database
 from shared.config import settings
 from api.middleware.file_validator import validate_video_file
-from api.services.upload_service import create_uploaded_video_task_from_path
+from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.task import TaskCreateRequest
 from api.routes.tasks import process_task, get_task_status, get_task_result
+from shared.r2_client import r2_client
+from api.security import require_database
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-async def _save_upload_to_temp(file: UploadFile) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "video.mp4").suffix or ".mp4")
-    try:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            temp_file.write(chunk)
-        temp_file.close()
-        return temp_file.name
-    except Exception:
-        temp_file.close()
-        if os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
-        raise
-
-
 @router.post("/videos")
 async def compat_upload(request: Request, file: UploadFile = File(...)):
     file = validate_video_file(file)
-    db = get_database()
-    if db is None:
-        raise HTTPException(503, "Database not connected")
+    db = require_database(get_database())
 
-    temp_path = await _save_upload_to_temp(file)
+    temp_path = await save_upload_to_temp(file)
     try:
         uploaded = await create_uploaded_video_task_from_path(
             request=request,
@@ -72,20 +54,20 @@ async def compat_preview(task_id: str):
     preview = Path(settings.STORAGE_DIR) / "previews" / f"{task_id}.jpg"
     if preview.exists():
         return FileResponse(str(preview), media_type="image/jpeg")
-    raise HTTPException(404, "Preview not found")
+    try:
+        return Response(content=r2_client.download_file(f"previews/{task_id}.jpg"), media_type="image/jpeg")
+    except Exception as exc:
+        raise HTTPException(404, "Preview not found") from exc
 
 
 @router.post("/tasks")
 async def compat_submit(request: Request, payload: dict):
-    import traceback
     video_id = payload.get("task_id") or payload.get("video_id", "")
     lane_config = payload.get("lane_config")
 
     if not video_id:
         raise HTTPException(400, "task_id or video_id required")
-    db = get_database()
-    if db is None:
-        raise HTTPException(503, "Database not connected")
+    db = require_database(get_database())
 
     # Check if task exists
     task = await db.tasks.find_one({"video_id": video_id})
@@ -117,14 +99,14 @@ async def compat_submit(request: Request, payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(500, f"Process failed: {e}")
+        logger.exception("Compatibility task submission failed for video %s", video_id)
+        raise HTTPException(500, "Process failed") from e
 
 
 @router.get("/tasks/{task_id}")
 async def compat_status(task_id: str):
     from shared.database import get_database
-    db = get_database()
+    db = require_database(get_database())
     resp = await get_task_status(task_id, db=db)
     return {
         "task_id": resp.task_id,
@@ -137,7 +119,6 @@ async def compat_status(task_id: str):
 
 @router.get("/tasks/{task_id}/result")
 async def compat_result(task_id: str):
-    import traceback
     from shared.database import get_database
     db = get_database()
     if db is None:
@@ -165,12 +146,12 @@ async def compat_result(task_id: str):
             "multi_lane_track_count": resp.multi_lane_track_count,
             "multi_lane_tracks": resp.multi_lane_tracks,
             "outputs": {"video_path": resp.result_video_url},
+            "events_url": resp.events_url,
             "total_frames": 0,
             "frames": 0,
         }
     except HTTPException:
         raise
     except Exception as e:
-        tb = traceback.format_exc()
-        logger.error(tb)
-        raise HTTPException(500, f"Result failed: {e}")
+        logger.exception("Compatibility result lookup failed for task %s", task_id)
+        raise HTTPException(500, "Result lookup failed") from e

@@ -32,7 +32,9 @@ class TaskProgressCallback(BaseModel):
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     result_video_url: Optional[str] = None
+    result_video_key: Optional[str] = None
     events_url: Optional[str] = None
+    events_key: Optional[str] = None
     statistics: Optional[List[VehicleCountDetail]] = None
     lane_volume_total: Optional[int] = None
     global_unique_count: Optional[int] = None
@@ -50,7 +52,9 @@ class TaskResultResponse(BaseModel):
     task_id: str
     status: str
     result_video_url: Optional[str] = None
+    result_video_key: Optional[str] = None
     events_url: Optional[str] = None
+    events_key: Optional[str] = None
     statistics: List[LaneStatistics]
     total_vehicles: int
     lane_volume_total: int = 0

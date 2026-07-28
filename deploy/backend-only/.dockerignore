@@ -1,0 +1,14 @@
+.git
+.venv
+frontend
+benchmark
+data
+models
+storage
+test-reports
+tests
+*.pt
+*.mp4
+*.avi
+*.mov
+*.mkv

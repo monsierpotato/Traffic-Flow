@@ -1,0 +1,72 @@
+name: TrafficFlow CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install backend dependencies
+        run: python -m pip install -e ".[api,worker,dev]"
+      - name: Compile Python sources
+        run: PYTHONPATH=src python -m compileall -q src
+      - name: Ruff fatal quality gate
+        run: python -m ruff check src tests
+      - name: Bandit high-severity security gate
+        run: python -m bandit -r src -lll -iii -x src/tfengine/cli
+      - name: Run backend tests
+        run: mkdir -p test-reports/junit && PYTHONPATH=src python -m pytest -q tests --cov=src --cov-report=term-missing --cov-report=xml --junitxml=test-reports/junit/backend.xml
+      - name: Upload backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-evidence
+          path: |
+            test-reports/junit/backend.xml
+            coverage.xml
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Build frontend
+        run: npm --prefix frontend run build
+
+  release-contract:
+    needs: [python, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install API test dependencies
+        run: python -m pip install -e ".[api,worker,dev]"
+      - name: Verify public contract
+        run: mkdir -p test-reports/junit && PYTHONPATH=src python -m pytest -q tests/contract --junitxml=test-reports/junit/contract.xml
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-test-evidence
+          path: test-reports/junit/contract.xml

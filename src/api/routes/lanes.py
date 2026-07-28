@@ -2,6 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from shared.database import get_database
 from api.schemas.lane import LaneConfigRequest, LaneConfigResponse
+from api.security import require_database
 
 router = APIRouter()
 
@@ -11,6 +12,7 @@ async def configure_lanes(
     db = Depends(get_database)
 ):
     """Saves ROI and Lane configurations for a video."""
+    db = require_database(db)
     # 1. Verify that the video/task document exists
     task = await db.tasks.find_one({"video_id": payload.video_id})
     if not task:
@@ -19,8 +21,8 @@ async def configure_lanes(
             detail=f"No upload session found for video_id {payload.video_id}"
         )
 
-    if not payload.lanes:
-        raise HTTPException(status_code=400, detail="Must provide at least one lane.")
+    if task.get("status") in {"pending", "processing", "completed", "archived"}:
+        raise HTTPException(status_code=409, detail="Lane configuration cannot change after processing has started")
 
     # 3. Save Lane Config to MongoDB
     # We save exactly what the frontend passed (the advanced JSON schema)
@@ -37,7 +39,7 @@ async def configure_lanes(
 
     # 4. Update task status to "configured"
     await db.tasks.update_one(
-        {"video_id": payload.video_id},
+        {"video_id": payload.video_id, "status": {"$nin": ["pending", "processing", "completed", "archived"]}},
         {
             "$set": {
                 "status": "configured",

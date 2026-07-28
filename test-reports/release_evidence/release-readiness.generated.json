@@ -1,0 +1,40 @@
+{
+  "generated_at": "2026-07-28T09:38:44Z",
+  "release_decision": "NO-GO",
+  "environment": {
+    "name": "local-workspace",
+    "head_commit": "8d58753781fb4d5a57336dfbbf186148b0db356c",
+    "working_tree": "dirty",
+    "production_credentials_used": false
+  },
+  "scope": "backend P0/P1 hardening, deployment and local release gates",
+  "test_runs": [
+    {"name": "python_compile", "status": "PASS"},
+    {"name": "backend_unit_security_contract", "status": "PASS", "tests": 12},
+    {"name": "openapi_import", "status": "PASS", "paths": 36},
+    {"name": "storage_mount_boundary", "status": "PASS"},
+    {"name": "ruff", "status": "BLOCKED", "reason": "not installed locally"},
+    {"name": "bandit", "status": "BLOCKED", "reason": "not installed locally"},
+    {"name": "docker_compose", "status": "BLOCKED", "reason": "production env intentionally absent"},
+    {"name": "mongodb_index_migration", "status": "BLOCKED", "reason": "legacy non-unique indexes require reviewed migration"},
+    {"name": "frontend_build", "status": "PASS"},
+    {"name": "upload_to_result_e2e", "status": "NOT_RUN", "reason": "safe staging dependencies unavailable"},
+    {"name": "backup_restore", "status": "NOT_RUN", "reason": "no approved test target"}
+  ],
+  "findings": [
+    {"id": "P0-CREDENTIAL", "severity": "P0", "area": "secrets", "title": "Rotate local database credential before commit or deployment"},
+    {"id": "P1-E2E", "severity": "P1", "area": "release", "title": "Staging upload-to-result evidence is missing"},
+    {"id": "P1-IDENTITY", "severity": "P1", "area": "security", "title": "User ownership, RBAC and tenant isolation are not implemented"},
+    {"id": "P1-LIVE-SCALE", "severity": "P1", "area": "live", "title": "Live runtime state remains process-local"},
+    {"id": "P1-INDEX-MIGRATION", "severity": "P1", "area": "database", "title": "Legacy non-unique indexes require reviewed migration"}
+  ],
+  "artifacts": [
+    "docs/product-context.generated.md",
+    "docs/architecture.generated.md",
+    "docs/data-flow.generated.md",
+    "docs/risk-register.generated.md",
+    "docs/test-strategy.generated.md",
+    "test-reports/release_evidence/release-readiness.generated.md",
+    "test-reports/release_evidence/no-go-findings.generated.md"
+  ]
+}

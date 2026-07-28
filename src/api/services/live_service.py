@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import os
 import subprocess
@@ -15,6 +16,7 @@ import cv2
 import numpy as np
 
 from shared.config import settings
+from shared.database import db_instance
 from worker.pipeline.ai_client import InferenceClient
 from worker.pipeline.local_client import LocalInferenceClient
 from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space, shift_points_to_crop
@@ -353,6 +355,9 @@ def _open_live_reader(source_url: str, crop_rect: Optional[tuple[int, int, int, 
 class LiveSessionState:
     session_id: str
     source_url: str
+    owner_key: str = field(default="", repr=False)
+    lane_config: dict = field(default_factory=dict, repr=False)
+    persistence_loop: Any = field(default=None, repr=False)
     status: str = "starting"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -382,6 +387,8 @@ class LiveSessionState:
             "session_id": self.session_id,
             "source_url": self.source_url,
             "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "uptime_s": round(time.time() - self.created_at, 1),
             "frames_read": self.frames_read,
             "frames_processed": self.frames_processed,
@@ -403,13 +410,57 @@ class LiveSessionState:
         }
 
 
+def _persistable_live_snapshot(session: LiveSessionState) -> dict:
+    """Return JSON/Mongo-safe live metadata without volatile frame bytes."""
+    snapshot = session.snapshot()
+    snapshot["lane_config"] = session.lane_config
+    snapshot["persisted_at"] = time.time()
+    return snapshot
+
+
+async def persist_live_session(session: LiveSessionState) -> None:
+    db = db_instance.db
+    if db is None:
+        return
+    await db.live_sessions.update_one(
+        {"session_id": session.session_id},
+        {"$set": _persistable_live_snapshot(session)},
+        upsert=True,
+    )
+
+
+def schedule_live_persistence(session: LiveSessionState) -> None:
+    """Persist worker-thread updates on the API event loop without blocking inference."""
+    loop = session.persistence_loop
+    if loop is None or loop.is_closed():
+        return
+    try:
+        future = asyncio.run_coroutine_threadsafe(persist_live_session(session), loop)
+        future.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+    except RuntimeError:
+        logger.debug("Live persistence loop is no longer available for %s", session.session_id)
+
+
 class LiveSessionManager:
     def __init__(self):
         self._sessions: Dict[str, LiveSessionState] = {}
         self._lock = threading.Lock()
 
-    def create(self, source_url: str, lane_config: Optional[dict], frame_skip: int = 1) -> LiveSessionState:
-        session = LiveSessionState(session_id=str(uuid.uuid4()), source_url=source_url)
+    def create(
+        self,
+        source_url: str,
+        lane_config: Optional[dict],
+        frame_skip: int = 1,
+        persistence_loop=None,
+        owner_key: str = "",
+    ) -> LiveSessionState:
+        session = LiveSessionState(
+            session_id=str(uuid.uuid4()),
+            source_url=source_url,
+            owner_key=owner_key,
+            lane_config=lane_config or {},
+            persistence_loop=persistence_loop,
+        )
         with self._lock:
             self._sessions[session.session_id] = session
         session.thread = threading.Thread(
@@ -435,6 +486,7 @@ class LiveSessionManager:
         session.stop_event.set()
         session.status = "stopping"
         session.updated_at = time.time()
+        schedule_live_persistence(session)
         return True
 
     def remove(self, session_id: str) -> bool:
@@ -443,8 +495,11 @@ class LiveSessionManager:
         if not session:
             return False
         session.stop_event.set()
+        if session.thread and session.thread.is_alive() and session.thread is not threading.current_thread():
+            session.thread.join(timeout=2)
         session.status = "stopping"
         session.updated_at = time.time()
+        schedule_live_persistence(session)
         return True
 
     def _run_session(self, session: LiveSessionState, lane_config: dict, frame_skip: int) -> None:
@@ -571,6 +626,7 @@ class LiveSessionManager:
             session.roi_mode = live_roi_mode
             session.ai_imgsz = settings.AI_IMGSZ
             session.status = "running"
+            schedule_live_persistence(session)
 
             def reset_runtime_state(reason: str) -> None:
                 nonlocal counter, last_tracking_ts
@@ -722,6 +778,7 @@ class LiveSessionManager:
                         session.lane_volume_total,
                     )
                 session.updated_at = now
+                schedule_live_persistence(session)
 
             while not session.stop_event.is_set():
                 wait_start = time.perf_counter()
@@ -782,9 +839,10 @@ class LiveSessionManager:
         except Exception as exc:
             logger.exception("Live session failed: %s", exc)
             session.status = "failed"
-            session.last_error = str(exc)
+            session.last_error = f"{exc.__class__.__name__}: live session failed"
         finally:
             session.updated_at = time.time()
+            schedule_live_persistence(session)
             if cap is not None:
                 cap.release()
             if ai_client is not None:

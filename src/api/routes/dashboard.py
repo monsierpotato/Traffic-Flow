@@ -1,19 +1,24 @@
+import asyncio
+
 from fastapi import APIRouter, Depends
 from shared.database import get_database
 from api.schemas.dashboard import DashboardStatsResponse, RecentTask
+from api.security import require_database
 
 router = APIRouter()
 
 @router.get("/stats", response_model=DashboardStatsResponse)
 async def get_dashboard_stats(db = Depends(get_database)):
     """Aggregates metrics for the frontend control dashboard."""
-    # 1. Counts of tasks by status
-    total_tasks = await db.tasks.count_documents({})
-    completed_tasks = await db.tasks.count_documents({"status": "completed"})
-    failed_tasks = await db.tasks.count_documents({"status": "failed"})
-    
-    # "processing" states: pending + processing
-    processing_tasks = await db.tasks.count_documents({"status": {"$in": ["pending", "processing"]}})
+    db = require_database(db)
+    # These counts are independent. Running them together avoids making the
+    # dashboard latency equal to four round trips to MongoDB.
+    total_tasks, completed_tasks, failed_tasks, processing_tasks = await asyncio.gather(
+        db.tasks.count_documents({}),
+        db.tasks.count_documents({"status": "completed"}),
+        db.tasks.count_documents({"status": "failed"}),
+        db.tasks.count_documents({"status": {"$in": ["pending", "processing"]}}),
+    )
 
     # 2. Fetch 10 most recent tasks
     cursor = db.tasks.find({}).sort("created_at", -1).limit(10)

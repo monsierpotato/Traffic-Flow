@@ -1,0 +1,50 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/backend-only/Dockerfile.api
+    env_file:
+      - ${TRAFFICFLOW_ENV_FILE:-.env}
+    ports:
+      - "8000:8000"
+    volumes:
+      - trafficflow_storage:/var/lib/trafficflow/storage
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/backend-only/Dockerfile.worker
+    env_file:
+      - ${TRAFFICFLOW_ENV_FILE:-.env}
+    volumes:
+      - trafficflow_storage:/var/lib/trafficflow/storage
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from shared.config import settings; import redis; redis.from_url(settings.REDIS_URL, socket_connect_timeout=2).ping()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+
+volumes:
+  trafficflow_storage:

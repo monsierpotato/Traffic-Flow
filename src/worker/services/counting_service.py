@@ -160,6 +160,7 @@ class CountingState:
         self._anchor_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=DIRECTION_WINDOW_FRAMES))
         self._smoothed_anchor: Dict[int, Tuple[float, float]] = {}
         self._last_count_events: deque = deque(maxlen=30)
+        self._count_events: List[dict] = []
 
         for lane in lanes:
             lid = lane["lane_id"]
@@ -250,12 +251,14 @@ class CountingState:
                 self.counters[best][cls_name].add(tid)
                 self.global_counted_ids.add(tid)
                 self.track_counted_lanes[tid].add(best)
-                self._last_count_events.append({
+                event = {
                     "track_id": tid,
                     "lane_id": best,
                     "class_name": cls_name,
                     "anchor": [round(smooth_center[0], 2), round(smooth_center[1], 2)],
-                })
+                }
+                self._count_events.append(event)
+                self._last_count_events.append(event)
                 logger.debug(f"Counted: track_id={tid}, class={cls_name}, lane={best}"
                              f"{' (lost+predicted)' if lost else ''}")
 
@@ -299,6 +302,10 @@ class CountingState:
             for ids in type_map.values():
                 total += len(ids)
         return total
+
+    def get_events(self) -> List[dict]:
+        """Return the complete count-event stream for durable result storage."""
+        return list(self._count_events)
 
 
 # Backward-compatible metric helpers attached to CountingState after class definition.

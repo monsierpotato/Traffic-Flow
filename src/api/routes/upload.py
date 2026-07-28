@@ -2,14 +2,19 @@ import json
 import os
 import re
 import tempfile
+import asyncio
+import shutil
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Request, status, Form
+from fastapi.responses import Response
 from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
-from api.services.upload_service import create_uploaded_video_task_from_path
+from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.upload import UploadResponse
 from shared.config import settings
+from shared.r2_client import r2_client
+from api.security import require_database
 
 router = APIRouter()
 
@@ -17,6 +22,8 @@ router = APIRouter()
 
 CHUNK_DIR = Path(settings.STORAGE_DIR) / "chunks"
 MAX_CHUNK_COUNT = 10_000
+MAX_CHUNK_BYTES = settings.MAX_CHUNK_SIZE_MB * 1024 * 1024
+ALLOWED_ASSET_PREFIXES = ("uploads/", "previews/", "results/", "live_previews/")
 
 
 def _validate_upload_id(upload_id: str) -> None:
@@ -36,23 +43,6 @@ def _validate_chunk_request(upload_id: str, chunk_index: int, total_chunks: int,
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported file extension {extension}. Allowed extensions: {', '.join(settings.ALLOWED_VIDEO_EXTENSIONS)}",
         )
-
-
-async def _save_upload_to_temp(file: UploadFile) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "video.mp4").suffix or ".mp4")
-    try:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            temp_file.write(chunk)
-        temp_file.close()
-        return temp_file.name
-    except Exception:
-        temp_file.close()
-        if os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
-        raise
 
 
 @router.post("/video/chunk")
@@ -78,7 +68,7 @@ async def upload_chunk(
 
     chunk_path = upload_dir / f"{chunk_index:06d}"
     temporary_chunk_path = upload_dir / f".{chunk_index:06d}.tmp"
-    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    max_bytes = MAX_CHUNK_BYTES
     size = 0
     try:
         with temporary_chunk_path.open("wb") as target:
@@ -90,7 +80,7 @@ async def upload_chunk(
                 if size > max_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"Chunk exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB",
+                        detail=f"Chunk exceeds maximum allowed size of {settings.MAX_CHUNK_SIZE_MB}MB",
                     )
                 target.write(chunk)
         os.replace(temporary_chunk_path, chunk_path)
@@ -105,6 +95,7 @@ async def upload_chunk(
             "filename": filename,
             "total_chunks": total_chunks,
             "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
         })
         temporary_meta_path = upload_dir / ".meta.json.tmp"
         temporary_meta_path.write_text(metadata, encoding="utf-8")
@@ -114,8 +105,13 @@ async def upload_chunk(
 
 
 @router.post("/video/chunk/{upload_id}/complete")
-async def complete_chunked_upload(upload_id: str, db=Depends(get_database)):
+async def complete_chunked_upload(
+    request: Request,
+    upload_id: str,
+    db=Depends(get_database),
+):
     _validate_upload_id(upload_id)
+    db = require_database(db)
     upload_dir = CHUNK_DIR / upload_id
     if not upload_dir.exists():
         raise HTTPException(404, "Upload session not found")
@@ -125,6 +121,13 @@ async def complete_chunked_upload(upload_id: str, db=Depends(get_database)):
         raise HTTPException(400, "Missing metadata")
 
     meta = json.loads(meta_path.read_text())
+    try:
+        created_at = datetime.fromisoformat(meta["created_at"])
+        if (datetime.utcnow() - created_at).total_seconds() > settings.CHUNK_SESSION_TTL_SECONDS:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            raise HTTPException(status_code=410, detail="Upload session expired")
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Upload metadata is invalid") from exc
     total_chunks = meta["total_chunks"]
     filename = meta.get("filename", "video.mp4")
     _validate_chunk_request(upload_id, 0, total_chunks, filename)
@@ -179,6 +182,28 @@ async def complete_chunked_upload(upload_id: str, db=Depends(get_database)):
     )
 
 
+@router.get("/assets/{key:path}")
+async def get_private_asset(key: str):
+    """Serve only a validated object key; the storage root is never mounted."""
+    normalized = key.strip("/")
+    if not normalized or ".." in Path(normalized).parts or "\\" in normalized:
+        raise HTTPException(status_code=400, detail="Invalid asset key")
+    if not normalized.startswith(ALLOWED_ASSET_PREFIXES):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    try:
+        content = await asyncio.to_thread(r2_client.download_file, normalized)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Asset not found") from exc
+    media_type = "application/octet-stream"
+    if normalized.endswith(".jpg") or normalized.endswith(".jpeg"):
+        media_type = "image/jpeg"
+    elif normalized.endswith(".mp4"):
+        media_type = "video/mp4"
+    elif normalized.endswith(".jsonl"):
+        media_type = "application/x-ndjson"
+    return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=60"})
+
+
 # --- Original single-file upload ---
 
 @router.post("/video", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
@@ -191,7 +216,7 @@ async def upload_video(
     and initializes a task document in MongoDB.
     """
     try:
-        temp_path = await _save_upload_to_temp(file)
+        temp_path = await save_upload_to_temp(file)
         try:
             uploaded = await create_uploaded_video_task_from_path(
                 request=request,
@@ -212,7 +237,9 @@ async def upload_video(
     except HTTPException as he:
         raise he
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("Video upload failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while uploading: {str(e)}"
+            detail="Video upload failed. Check the request ID and server logs."
         )

@@ -1,0 +1,28 @@
+FROM python:3.10.14-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg libglib2.0-0 libgl1 libmagic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml package.json ./
+COPY src ./src
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir ".[api,worker]"
+
+RUN useradd --create-home --uid 10001 trafficflow \
+    && mkdir -p /var/lib/trafficflow/storage \
+    && chown -R trafficflow:trafficflow /app /var/lib/trafficflow
+USER trafficflow
+
+ENV CELERY_QUEUE_NAME=trafficflow_queue
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "from shared.config import settings; import redis; redis.from_url(settings.REDIS_URL, socket_connect_timeout=2).ping()"
+
+CMD ["sh", "-c", "celery -A worker.celery_app worker --pool=solo --concurrency=1 -Q ${CELERY_QUEUE_NAME} --loglevel=info"]

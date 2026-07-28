@@ -11,12 +11,15 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import cv2
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from api.services.live_service import live_manager
+from api.services.live_service import live_manager, persist_live_session
+from shared.database import get_database
 from shared.config import settings
+from shared.r2_client import r2_client
+from api.security import client_identity, is_exact_youtube_host, validate_external_url
 
 router = APIRouter()
 
@@ -39,8 +42,7 @@ class LiveConfigValidate(BaseModel):
 
 
 def _is_youtube_url(url: str) -> bool:
-    host = urlparse(url).netloc.lower()
-    return "youtube.com" in host or "youtu.be" in host
+    return is_exact_youtube_host(urlparse(url).hostname)
 
 
 def _source_type(url: str, original_url: str) -> str:
@@ -138,6 +140,23 @@ def _capture_snapshot(source_url: str, source_id: str) -> dict:
         cap.release()
 
 
+async def _persist_live_source(source: dict) -> None:
+    """Persist source metadata and copy the preview through the storage adapter."""
+    preview_path = Path(source["preview_path"])
+    preview_key = f"live_previews/{source['source_id']}.jpg"
+    source["preview_key"] = preview_key
+    source["preview_storage_url"] = await asyncio.to_thread(
+        r2_client.upload_path, preview_path, preview_key, "image/jpeg"
+    )
+    db = get_database()
+    if db is not None:
+        await db.live_sources.update_one(
+            {"source_id": source["source_id"]},
+            {"$set": source},
+            upsert=True,
+        )
+
+
 def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
     errors: list[str] = []
     resolution = config.get("resolution") or {}
@@ -185,7 +204,7 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
             ])
         for label, points in all_geometry:
             for point in points:
-                if len(point) >= 2 and not (0 <= point[0] < coordinate_width and 0 <= point[1] < coordinate_height):
+                if len(point) >= 2 and not (0 <= point[0] <= coordinate_width and 0 <= point[1] <= coordinate_height):
                     errors.append(f"{label}: point {point} is outside {geometry_space} bounds")
                     break
     return not errors, errors
@@ -194,11 +213,13 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
 @router.post("/resolve")
 async def resolve_live_source(payload: LiveSourceResolve):
     original_url = payload.url.strip()
+    validate_external_url(original_url, allow_youtube=_is_youtube_url(original_url))
     resolved_url = (
         await asyncio.to_thread(_resolve_youtube_url, original_url)
         if _is_youtube_url(original_url)
         else original_url
     )
+    validate_external_url(resolved_url)
     source_id = str(uuid.uuid4())
     snapshot = await asyncio.to_thread(_capture_snapshot, resolved_url, source_id)
     source = {
@@ -211,6 +232,7 @@ async def resolve_live_source(payload: LiveSourceResolve):
         **snapshot,
     }
     LIVE_SOURCES[source_id] = source
+    await _persist_live_source(source)
     return {k: v for k, v in source.items() if k != "preview_path"}
 
 
@@ -218,10 +240,15 @@ async def resolve_live_source(payload: LiveSourceResolve):
 async def refresh_live_snapshot(source_id: str):
     source = LIVE_SOURCES.get(source_id)
     if not source:
+        db = get_database()
+        source = await db.live_sources.find_one({"source_id": source_id}) if db is not None else None
+    if not source:
         raise HTTPException(404, "Live source not found")
     snapshot = await asyncio.to_thread(_capture_snapshot, source["resolved_url"], source_id)
     source.update(snapshot)
     source["updated_at"] = time.time()
+    LIVE_SOURCES[source_id] = source
+    await _persist_live_source(source)
     return {k: v for k, v in source.items() if k != "preview_path"}
 
 
@@ -229,11 +256,20 @@ async def refresh_live_snapshot(source_id: str):
 async def get_live_preview(source_id: str):
     source = LIVE_SOURCES.get(source_id)
     if not source:
+        db = get_database()
+        source = await db.live_sources.find_one({"source_id": source_id}) if db is not None else None
+    if not source:
         raise HTTPException(404, "Live source not found")
     preview_path = Path(source["preview_path"])
-    if not preview_path.exists():
-        raise HTTPException(404, "Live preview not found")
-    return FileResponse(str(preview_path), media_type="image/jpeg")
+    if preview_path.exists():
+        return FileResponse(str(preview_path), media_type="image/jpeg")
+    try:
+        return Response(
+            content=await asyncio.to_thread(r2_client.download_file, source.get("preview_key") or f"live_previews/{source_id}.jpg"),
+            media_type="image/jpeg",
+        )
+    except Exception as exc:
+        raise HTTPException(404, "Live preview not found") from exc
 
 
 @router.post("/validate-config")
@@ -243,7 +279,14 @@ async def validate_live_config(payload: LiveConfigValidate):
 
 
 @router.post('/sessions')
-async def create_live_session(payload: LiveSessionCreate):
+async def create_live_session(payload: LiveSessionCreate, request: Request):
+    validate_external_url(payload.source_url)
+    owner_key = client_identity(request)
+    active_sessions = live_manager.list()
+    if len(active_sessions) >= settings.LIVE_MAX_SESSIONS:
+        raise HTTPException(429, "Live session capacity is currently full")
+    if sum(1 for item in active_sessions if item.owner_key == owner_key) >= settings.LIVE_MAX_SESSIONS_PER_CLIENT:
+        raise HTTPException(429, "Live session limit reached for this client")
     valid, errors = _validate_lane_config(payload.lane_config or {})
     if not valid:
         raise HTTPException(422, {"message": "Valid lane_config is required before live counting", "errors": errors})
@@ -251,20 +294,33 @@ async def create_live_session(payload: LiveSessionCreate):
         source_url=payload.source_url,
         lane_config=payload.lane_config,
         frame_skip=payload.frame_skip,
+        persistence_loop=asyncio.get_running_loop(),
+        owner_key=owner_key,
     )
+    await persist_live_session(session)
     return session.snapshot()
 
 
 @router.get('/sessions')
 async def list_live_sessions():
-    return {"sessions": [session.snapshot() for session in live_manager.list()]}
+    active = {session.session_id: session.snapshot() for session in live_manager.list()}
+    db = get_database()
+    if db is not None:
+        stored = await db.live_sessions.find({}).sort("updated_at", -1).limit(100).to_list(length=100)
+        for session in stored:
+            active.setdefault(session["session_id"], session)
+    return {"sessions": list(active.values())}
 
 
 @router.get('/sessions/{session_id}')
 async def get_live_session(session_id: str):
     session = live_manager.get(session_id)
     if not session:
-        raise HTTPException(404, 'Live session not found')
+        db = get_database()
+        stored = await db.live_sessions.find_one({"session_id": session_id}) if db is not None else None
+        if not stored:
+            raise HTTPException(404, 'Live session not found')
+        return stored
     return session.snapshot()
 
 
@@ -323,13 +379,35 @@ async def stream_live_session_frames(session_id: str):
 
 @router.delete('/sessions/{session_id}')
 async def stop_live_session(session_id: str):
-    if not live_manager.stop(session_id):
-        raise HTTPException(404, 'Live session not found')
+    session = live_manager.get(session_id)
+    if session:
+        live_manager.stop(session_id)
+        await persist_live_session(session)
+    else:
+        db = get_database()
+        if db is None or not await db.live_sessions.find_one({"session_id": session_id}):
+            raise HTTPException(404, 'Live session not found')
+        await db.live_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {"status": "stopping", "updated_at": time.time()}},
+        )
     return {'session_id': session_id, 'status': 'stopping'}
 
 
 @router.delete('/sessions/{session_id}/remove')
 async def remove_live_session(session_id: str):
-    if not live_manager.remove(session_id):
-        raise HTTPException(404, 'Live session not found')
+    session = live_manager.get(session_id)
+    if session:
+        live_manager.remove(session_id)
+        session.status = "removed"
+        session.updated_at = time.time()
+        await persist_live_session(session)
+    else:
+        db = get_database()
+        if db is None or not await db.live_sessions.find_one({"session_id": session_id}):
+            raise HTTPException(404, 'Live session not found')
+        await db.live_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {"status": "removed", "updated_at": time.time()}},
+        )
     return {'session_id': session_id, 'status': 'removed'}

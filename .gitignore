@@ -5,6 +5,7 @@ __pycache__/
 .venv-gpu/
 venv/
 .env
+env
 
 # Old ref moved to src/tfengine/
 trafficflow/
@@ -37,6 +38,17 @@ benchmark_results/outputs/**/overlays/
 benchmark_results/outputs/**/*.jpg
 benchmark_results/outputs/**/*.png
 outputs/
+storage/*
+!storage/.gitkeep
+test-reports/*
+!test-reports/release_evidence/
+!test-reports/release_evidence/*.md
+!test-reports/release_evidence/*.json
+frontend/dist/
+benchmark/reports/
+benchmark/runs/
+benchmark/predictions/
+benchmark/ground_truth/
 kaggle.json
 **/access_token
 

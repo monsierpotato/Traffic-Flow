@@ -6,10 +6,12 @@ import time
 import json
 import tempfile
 import urllib.request
+from urllib.error import HTTPError
 import cv2
 import numpy as np
 from celery import Celery
 from shared.config import settings
+from api.security import validate_external_url
 from shared.r2_client import r2_client
 from worker.pipeline.ai_client import InferenceClient
 from worker.pipeline.local_client import LocalInferenceClient
@@ -37,6 +39,15 @@ celery_app.conf.update(
     task_ignore_result=True,
     task_store_errors_even_if_ignored=False,
     task_default_queue=settings.CELERY_QUEUE_NAME,
+    task_track_started=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_acks_on_failure_or_timeout=False,
+    worker_prefetch_multiplier=1,
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        "visibility_timeout": settings.CELERY_VISIBILITY_TIMEOUT_SECONDS,
+    },
 )
 
 
@@ -52,11 +63,46 @@ def _send_callback(url: str, payload: dict):
             **({"Authorization": f"Bearer {settings.CALLBACK_TOKEN}"} if settings.CALLBACK_TOKEN else {}),
         }, method="PUT",
     )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            logger.info(f"Callback {resp.status}")
-    except Exception as e:
-        logger.error(f"Callback failed: {e}")
+    attempts = max(1, settings.CALLBACK_RETRY_ATTEMPTS + 1)
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=settings.CALLBACK_TIMEOUT_SECONDS) as resp:
+                logger.info(
+                    "callback_sent status=%s task_id=%s attempt=%s",
+                    resp.status,
+                    payload.get("task_id") or "unknown",
+                    attempt + 1,
+                )
+                return True
+        except HTTPError as exc:
+            # Permanent client errors should not create a retry storm.  A
+            # timeout, 408, 429, or 5xx response remains retryable.
+            retryable = exc.code in {408, 429} or exc.code >= 500
+            if not retryable:
+                logger.error("Callback rejected status=%s", exc.code)
+                return False
+            error = exc
+        except Exception as exc:
+            error = exc
+
+        if attempt + 1 < attempts:
+            delay = settings.CALLBACK_RETRY_BACKOFF_SECONDS * (2 ** attempt)
+            logger.warning(
+                "callback_retry attempt=%s/%s delay=%.2fs error=%s",
+                attempt + 1,
+                attempts,
+                delay,
+                error.__class__.__name__,
+            )
+            time.sleep(delay)
+
+    logger.error("Callback failed after %s attempts", attempts)
+    return False
+
+
+def _required_callback(url: str, payload: dict) -> None:
+    if not _send_callback(url, payload):
+        raise RuntimeError("callback delivery failed")
 
 
 # ---------------------------------------------------------------------------
@@ -86,16 +132,39 @@ def _warn_points_outside_processing_bounds(lanes: list, width: int, height: int,
         )
 
 
+def _remap_detections_to_crop(raw: list[dict], transform: FrameTransform | None) -> None:
+    """Mutate detector boxes from AI coordinates back into crop coordinates."""
+    if transform is None:
+        return
+    for detection in raw:
+        bbox = detection.get("bbox_xyxy")
+        if bbox and len(bbox) == 4:
+            detection["bbox_xyxy"] = transform.bbox_ai_to_crop(bbox)
+
+
 def _download_video_to_path(url: str, destination_path: str) -> float:
     import requests
-    logger.info(f"Downloading video: {url}")
+    storage_base = settings.R2_PUBLIC_URL.rstrip("/")
+    if storage_base.endswith("/static"):
+        storage_base = f"{storage_base[:-len('/static')]}/api/v1/upload/assets"
+    if not url.startswith(storage_base):
+        validate_external_url(url)
+    logger.info("Downloading working video from configured storage/source")
     start = time.perf_counter()
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     with requests.Session() as s:
         resp = s.get(url, timeout=120, stream=True)
         resp.raise_for_status()
+        content_length = int(resp.headers.get("content-length") or 0)
+        if content_length > max_bytes:
+            raise ValueError("remote video exceeds configured size limit")
+        downloaded = 0
         with open(destination_path, "wb") as fp:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        raise ValueError("remote video exceeds configured size limit")
                     fp.write(chunk)
     return (time.perf_counter() - start) * 1000.0
 
@@ -109,6 +178,7 @@ def _download_video_to_path(url: str, destination_path: str) -> float:
 def process_video(task_id: str, video_url: str, lane_config: dict, callback_url: str):
     temp_video_path = None
     temp_out_path = None
+    temp_events_path = None
     cap = None
     ai_client: InferenceClient = None
     out_video = None
@@ -131,7 +201,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             logger.warning("Could not shut down AI client for task %s", task_id, exc_info=True)
 
     try:
-        _send_callback(callback_url, {
+        _required_callback(callback_url, {
             "status": "processing", "progress": 5,
             "stage": "downloading", "stage_detail": "Downloading working video",
         })
@@ -141,7 +211,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         temp_video_path = f.name
         f.close()
         download_ms = _download_video_to_path(video_url, temp_video_path)
-        _send_callback(callback_url, {
+        _required_callback(callback_url, {
             "status": "processing", "progress": 10,
             "stage": "opening_video", "stage_detail": "Opening video stream",
         })
@@ -243,8 +313,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
                 processor.set_reference_frame(ref)
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-        session_id = ai_client.create_session()
-        _send_callback(callback_url, {
+        ai_client.create_session()
+        _required_callback(callback_url, {
             "status": "processing", "progress": 15,
             "stage": "inferencing", "stage_detail": "Running detection and tracking",
         })
@@ -295,10 +365,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
                                 (time.perf_counter() - pending_submitted_at) * 1000.0,
                             )
                         # Remap bbox from AI space → crop space
-                        for det in raw:
-                            b = det.get("bbox_xyxy")
-                            if b and len(b) == 4:
-                                det["bbox_xyxy"] = prev_transform.bbox_ai_to_crop(b)
+                        _remap_detections_to_crop(raw, prev_transform)
                         with profiler.timer("tracking", frame_idx):
                             enriched = _track_to_dicts(tracker.update(raw))
                         with profiler.timer("counting", frame_idx):
@@ -336,7 +403,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             progress = 15 + int((frame_idx / max(total_frames, 1)) * 80)
             progress = min(progress, 95)
             if progress - last_progress >= 5:
-                _send_callback(callback_url, {
+                _required_callback(callback_url, {
                     "status": "processing", "progress": progress,
                     "stage": "inferencing",
                     "stage_detail": f"frame {frame_idx}/{total_frames}",
@@ -362,21 +429,17 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
                         pending_frame_idx,
                         (time.perf_counter() - pending_submitted_at) * 1000.0,
                     )
-                if prev_transform is not None:
-                    for det in raw:
-                        b = det.get("bbox_xyxy")
-                        if b and len(b) == 4:
-                            det["bbox_xyxy"] = prev_transform.bbox_ai_to_crop(b)
+                _remap_detections_to_crop(raw, prev_transform)
                 enriched = _track_to_dicts(tracker.update(raw))
                 counter.process_detections(enriched)
             except Exception:
-                pass
+                logger.warning("Final inference result could not be applied for task %s", task_id, exc_info=True)
 
         close_ai_client()
         profiler.stop_resource_sampler()
         logger.info(f"Done: {processed} AI frames, {counter.get_total_count()} vehicles")
 
-        _send_callback(callback_url, {
+        _required_callback(callback_url, {
             "status": "processing", "progress": 96,
             "stage": "rendering", "stage_detail": "Finalizing output artifacts",
         })
@@ -418,8 +481,9 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         )
 
         from pathlib import Path
-        report_dir = Path("benchmark/reports")
+        report_dir = Path("benchmark/reports") / task_id
         try:
+            report_dir.mkdir(parents=True, exist_ok=True)
             write_summary_csv([bresult], report_dir / "summary.csv")
             write_json([bresult], report_dir / "summary.json")
             write_markdown([bresult], report_dir / "summary.md")
@@ -432,7 +496,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         diagnostics = counter.get_diagnostics()
         if not temp_out_path or not os.path.exists(temp_out_path):
             raise RuntimeError("Rendered output video was not created")
-        _send_callback(callback_url, {
+        _required_callback(callback_url, {
             "status": "processing", "progress": 98,
             "stage": "uploading_result", "stage_detail": "Uploading rendered result video",
         })
@@ -443,13 +507,29 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         if not result_url:
             raise RuntimeError("Result storage returned an empty URL")
 
-        _send_callback(callback_url, {
+        events_key = f"results/{task_id}/events.jsonl"
+        events_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
+        temp_events_path = events_file.name
+        events_file.close()
+        with open(temp_events_path, "w", encoding="utf-8") as event_stream:
+            for event in counter.get_events():
+                event_stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+        try:
+            events_url = r2_client.upload_path(temp_events_path, events_key, "application/x-ndjson")
+        except Exception as exc:
+            raise RuntimeError(f"Could not upload count events: {exc}") from exc
+        if not events_url:
+            raise RuntimeError("Event storage returned an empty URL")
+
+        _required_callback(callback_url, {
             "status": "completed",
             "progress": 100,
             "stage": "completed",
             "stage_detail": "Processing completed",
             "result_video_url": result_url,
-            "events_url": None,
+            "result_video_key": f"results/{task_id}.mp4",
+            "events_url": events_url,
+            "events_key": events_key,
             "statistics": statistics,
             "lane_volume_total": diagnostics["lane_volume_total"],
             "global_unique_count": diagnostics["global_unique_count"],
@@ -460,13 +540,16 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         return {"status": "completed", "task_id": task_id}
 
     except Exception as e:
-        logger.error(f"Task {task_id} FAILED: {e}", exc_info=True)
+        logger.error("Task %s failed with %s", task_id, e.__class__.__name__, exc_info=True)
         close_ai_client()
-        _send_callback(callback_url, {
-            "status": "failed", "progress": 0, "error_message": str(e),
-            "stage": "failed", "stage_detail": str(e),
+        callback_delivered = _send_callback(callback_url, {
+            "status": "failed", "progress": 0,
+            "error_message": f"Processing failed ({e.__class__.__name__})",
+            "stage": "failed", "stage_detail": "Processing failed",
         })
-        return {"status": "failed", "task_id": task_id, "error": str(e)}
+        if not callback_delivered:
+            raise RuntimeError("terminal failure callback could not be delivered") from e
+        return {"status": "failed", "task_id": task_id, "error": e.__class__.__name__}
 
     finally:
         if cap is not None:
@@ -475,7 +558,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             out_video.release()
         close_ai_client()
         profiler.stop_resource_sampler()
-        for p in (temp_video_path, temp_out_path):
+        for p in (temp_video_path, temp_out_path, temp_events_path):
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)

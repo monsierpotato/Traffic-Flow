@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -88,7 +89,8 @@ class LocalJsonCollection:
         return None
 
     def find(self, query: Optional[dict] = None):
-        docs = [copy.deepcopy(doc) for doc in self._docs() if self._matches(doc, query)]
+        with self._database.lock:
+            docs = [copy.deepcopy(doc) for doc in self._docs() if self._matches(doc, query)]
         return LocalCursor(docs)
 
     async def update_one(self, query: dict, update: dict, upsert: bool = False):
@@ -125,8 +127,13 @@ class LocalJsonCollection:
         async with self._database.lock:
             return sum(1 for doc in self._docs() if self._matches(doc, query))
 
+    async def create_index(self, *args, **kwargs):
+        """Compatibility no-op: JSON fallback is protected by the database lock."""
+        return "local-json-index"
+
     def aggregate(self, pipeline: list):
-        docs = [copy.deepcopy(doc) for doc in self._docs()]
+        with self._database.lock:
+            docs = [copy.deepcopy(doc) for doc in self._docs()]
         for stage in pipeline or []:
             if "$match" in stage:
                 docs = [doc for doc in docs if _matches_query(doc, stage["$match"])]
@@ -183,7 +190,16 @@ class LocalJsonDatabase:
     def save(self):
         payload = {"_counter": self._counter, **self._data}
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path = self.path.with_name(f".{self.path.name}.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temporary_path, self.path)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
 
 
 class _AsyncThreadLock:
@@ -195,6 +211,13 @@ class _AsyncThreadLock:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        self._lock.release()
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
         self._lock.release()
 
 
@@ -232,6 +255,8 @@ def _matches_query(doc: dict, query: Optional[dict]) -> bool:
                     if operator == "$gte" and not (actual is not None and actual >= operand):
                         return False
                     if operator == "$in" and actual not in operand:
+                        return False
+                    if operator == "$nin" and actual in operand:
                         return False
                     if operator == "$ne" and actual == operand:
                         return False
@@ -288,6 +313,42 @@ async def connect_to_mongo():
             exc,
             settings.LOCAL_DB_PATH,
         )
+    await ensure_indexes()
+
+
+async def ensure_indexes():
+    """Create the small set of indexes required by automatic persistence."""
+    if db_instance.db is None:
+        return
+    index_specs = {
+        "tasks": [
+            ([('task_id', 1)], {"unique": True, "name": "uq_tasks_task_id"}),
+            ([('video_id', 1)], {"unique": True, "name": "uq_tasks_video_id"}),
+            ([('status', 1), ('expires_at', 1)], {}),
+        ],
+        "lane_configs": [
+            ([('task_id', 1)], {"unique": True, "name": "uq_lane_configs_task_id"}),
+            ([('video_id', 1)], {"unique": True, "name": "uq_lane_configs_video_id"}),
+        ],
+        "traffic_statistics": [
+            ([('task_id', 1)], {"name": "ix_traffic_statistics_task_id"}),
+            ([('task_id', 1), ('lane_id', 1), ('vehicle_type', 1), ('direction', 1)], {"unique": True, "name": "uq_traffic_statistics_row"}),
+        ],
+        "live_sources": [([('source_id', 1)], {"unique": True, "name": "uq_live_sources_source_id"})],
+        "live_sessions": [
+            ([('session_id', 1)], {"unique": True, "name": "uq_live_sessions_session_id"}),
+            ([('status', 1), ('updated_at', -1)], {}),
+        ],
+    }
+    for collection_name, specs in index_specs.items():
+        collection = getattr(db_instance.db, collection_name)
+        for keys, options in specs:
+            try:
+                await collection.create_index(keys, **options)
+            except Exception:
+                logger.error("Could not create index %s on %s", keys, collection_name, exc_info=True)
+                if settings.APP_ENV.lower() in {"prod", "production"} and settings.MONGODB_STRICT_INDEXES:
+                    raise
 
 
 async def close_mongo_connection():

@@ -2,12 +2,13 @@ import logging
 import os
 import tempfile
 import uuid
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, UploadFile, status
 
 from api.services.video_service import extract_first_frame_path, normalize_video_path, VideoMeta
 from shared.config import settings
@@ -24,6 +25,27 @@ class UploadedVideo:
     task_doc: dict
     original_meta: VideoMeta
     working_meta: VideoMeta
+
+
+async def save_upload_to_temp(file: UploadFile) -> str:
+    """Stream an upload to a temporary path shared by all upload routes."""
+    temp_file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=Path(file.filename or "video.mp4").suffix or ".mp4",
+    )
+    try:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            temp_file.write(chunk)
+        temp_file.close()
+        return temp_file.name
+    except Exception:
+        temp_file.close()
+        if os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+        raise
 
 
 def _meta_resolution(meta: VideoMeta) -> str:
@@ -50,7 +72,7 @@ def _save_local_preview(video_id: str, preview_bytes: bytes, request: Request) -
     local_preview_dir.mkdir(parents=True, exist_ok=True)
     (local_preview_dir / f"{video_id}.jpg").write_bytes(preview_bytes)
     base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/static/previews/{video_id}.jpg"
+    return f"{base_url}/api/v1/upload/assets/previews/{video_id}.jpg"
 
 
 def _task_document(
@@ -82,7 +104,9 @@ def _task_document(
         "original_video_url": original_video_url,
         "preview_url": preview_url,
         "result_video_url": None,
+        "result_video_key": None,
         "events_url": None,
+        "events_key": None,
         "error_message": None,
         "stored_original_video": stored_original,
         "original_video_key": original_video_key,
@@ -117,30 +141,32 @@ async def create_uploaded_video_task_from_path(
     owns_working_path = False
 
     try:
-        working_path, original_meta, working_meta, transcode_ms, owns_working_path = normalize_video_path(video_path)
+        working_path, original_meta, working_meta, transcode_ms, owns_working_path = await asyncio.to_thread(
+            normalize_video_path, video_path
+        )
 
         stored_original = bool(settings.STORE_ORIGINAL_VIDEO)
         working_key = f"uploads/{video_id}_1080p.mp4"
 
         if stored_original:
             original_key = f"uploads/{video_id}.mp4"
-            original_url = r2_client.upload_path(video_path, original_key, content_type or "video/mp4")
+            original_url = await asyncio.to_thread(r2_client.upload_path, video_path, original_key, content_type or "video/mp4")
             uploaded_keys.append(original_key)
-            working_url = r2_client.upload_path(working_path, working_key, "video/mp4")
+            working_url = await asyncio.to_thread(r2_client.upload_path, working_path, working_key, "video/mp4")
             uploaded_keys.append(working_key)
             video_url = original_url
             original_video_url = original_url
             original_video_key = original_key
         else:
             working_key = f"uploads/{video_id}.mp4"
-            working_url = r2_client.upload_path(working_path, working_key, "video/mp4")
+            working_url = await asyncio.to_thread(r2_client.upload_path, working_path, working_key, "video/mp4")
             uploaded_keys.append(working_key)
             video_url = working_url
             original_video_url = None
             original_video_key = None
 
         try:
-            preview_bytes = extract_first_frame_path(working_path)
+            preview_bytes = await asyncio.to_thread(extract_first_frame_path, working_path)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -148,9 +174,8 @@ async def create_uploaded_video_task_from_path(
             ) from exc
 
         preview_key = f"previews/{video_id}.jpg"
-        r2_client.upload_file(preview_bytes, preview_key, "image/jpeg")
+        preview_url = await asyncio.to_thread(r2_client.upload_file, preview_bytes, preview_key, "image/jpeg")
         uploaded_keys.append(preview_key)
-        preview_url = _save_local_preview(video_id, preview_bytes, request)
 
         task_doc = _task_document(
             video_id=video_id,
@@ -189,19 +214,19 @@ async def create_uploaded_video_task_from_path(
     except HTTPException:
         for key in uploaded_keys:
             try:
-                r2_client.delete_file(key)
+                await asyncio.to_thread(r2_client.delete_file, key)
             except Exception:
                 logger.warning("Could not delete uploaded key after failure: %s", key)
         raise
     except Exception as exc:
         for key in uploaded_keys:
             try:
-                r2_client.delete_file(key)
+                await asyncio.to_thread(r2_client.delete_file, key)
             except Exception:
                 logger.warning("Could not delete uploaded key after failure: %s", key)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while uploading: {exc}",
+            detail="Video upload failed. Check the request ID and server logs.",
         ) from exc
     finally:
         if owns_working_path and working_path and os.path.exists(working_path):

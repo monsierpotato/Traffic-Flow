@@ -1,11 +1,15 @@
-from datetime import datetime
+import asyncio
 import os
 import logging
+import hmac
+from datetime import datetime
+from collections import defaultdict
 from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from shared.database import get_database
 from shared.config import settings
 from worker.celery_app import celery_app
+from api.security import require_database
 from api.schemas.task import (
     TaskCreateRequest,
     TaskCreateResponse,
@@ -17,6 +21,34 @@ from api.schemas.task import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+TERMINAL_STATUSES = {"completed", "failed", "archived"}
+PROCESSING_STATUSES = {"pending", "processing"}
+PRIVATE_LANE_CONFIG_FIELDS = {"_id", "created_at", "updated_at"}
+STATUS_ORDER = {
+    "uploaded": 0,
+    "configured": 1,
+    "pending": 2,
+    "processing": 3,
+    "completed": 4,
+    "failed": 4,
+    "archived": 5,
+}
+
+
+def _config_is_processable(config: dict) -> bool:
+    """Reject drafts that were autosaved before geometry was complete."""
+    if not config.get("roi_polygon") or len(config.get("roi_polygon") or []) < 3:
+        return False
+    if not (config.get("processing_roi") or config.get("annotation_roi")):
+        return False
+    lanes = config.get("lanes") or []
+    return bool(lanes) and all(
+        len(lane.get("valid_zone") or []) >= 3
+        and len(lane.get("counting_line") or []) == 2
+        and len(lane.get("direction") or []) == 2
+        for lane in lanes
+    )
 
 
 async def find_task(db, identifier: str):
@@ -34,7 +66,7 @@ def _public_lane_config(lane_config: dict | None) -> dict | None:
     return {
         key: value
         for key, value in lane_config.items()
-        if key not in {"_id", "created_at", "updated_at"}
+        if key not in PRIVATE_LANE_CONFIG_FIELDS
     }
 
 # Removed background_crop_and_enqueue
@@ -46,15 +78,14 @@ async def process_task(
     db = Depends(get_database)
 ):
     """Validate the configured task and enqueue it in Celery."""
+    db = require_database(db)
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()[:200]
     task = await db.tasks.find_one({"video_id": payload.video_id})
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task or video session not found for video_id {payload.video_id}"
         )
-
-    TERMINAL_STATUSES = {"completed", "failed", "archived"}
-    PROCESSING_STATUSES = {"pending", "processing"}
 
     if task["status"] == "uploaded":
         raise HTTPException(
@@ -63,6 +94,8 @@ async def process_task(
         )
 
     if task["status"] in PROCESSING_STATUSES:
+        if idempotency_key and task.get("idempotency_key") == idempotency_key:
+            return TaskCreateResponse(task_id=task["task_id"], status=task["status"], message="Task already queued.")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Task is already {task['status']}. Wait for it to complete."
@@ -83,6 +116,12 @@ async def process_task(
             detail="No lane configuration found. Please post config first."
         )
 
+    if not _config_is_processable(lane_config):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lane configuration is still a draft. Complete ROI, lane zones, counting lines, and directions before processing.",
+        )
+
     # Keep callbacks explicit for the native worker; fallback to the request URL.
     callback_host = getattr(settings, "CALLBACK_HOST", None) or os.environ.get("CALLBACK_HOST", "")
     if callback_host:
@@ -91,8 +130,8 @@ async def process_task(
         base_url = str(request.base_url)
         callback_url = f"{base_url.rstrip('/')}/api/v1/tasks/progress/{task_id}"
 
-    await db.tasks.update_one(
-        {"task_id": task_id},
+    claimed = await db.tasks.update_one(
+        {"task_id": task_id, "status": task["status"]},
         {
             "$set": {
                 "status": "pending",
@@ -100,9 +139,16 @@ async def process_task(
                 "stage": "queued",
                 "stage_detail": "Waiting for worker capacity",
                 "updated_at": datetime.utcnow()
-            }
+            },
         }
     )
+    if not getattr(claimed, "matched_count", 0):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is already being queued")
+    if idempotency_key:
+        await db.tasks.update_one(
+            {"task_id": task_id, "status": "pending"},
+            {"$set": {"idempotency_key": idempotency_key}},
+        )
 
     geometry_space = lane_config.get("geometry_space")
     if geometry_space is None:
@@ -158,7 +204,7 @@ async def process_task(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Worker queue unavailable. Start native Redis and the Celery worker, then retry with a new upload.",
+            detail="Worker queue unavailable. Retry after the worker is ready.",
         ) from exc
 
     return TaskCreateResponse(
@@ -173,6 +219,7 @@ async def get_task_status(
     db = Depends(get_database)
 ):
     """Retrieves the current status and progress of a task."""
+    db = require_database(db)
     task = await find_task(db, task_id)
     if not task:
         raise HTTPException(
@@ -199,16 +246,40 @@ async def task_progress_callback(
     db = Depends(get_database)
 ):
     """Endpoint for Worker to report progress updates, failures, or completion."""
+    if settings.APP_ENV.lower() in {"prod", "production"} and not settings.CALLBACK_TOKEN:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Callback authentication is not configured")
     if settings.CALLBACK_TOKEN:
         supplied = request.headers.get("authorization", "")
-        if supplied != f"Bearer {settings.CALLBACK_TOKEN}":
+        if not hmac.compare_digest(supplied, f"Bearer {settings.CALLBACK_TOKEN}"):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid callback token")
+    db = require_database(db)
     task = await db.tasks.find_one({"task_id": task_id})
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with id {task_id} not found."
         )
+
+    current_status = task.get("status", "uploaded")
+    incoming_status = payload.status
+    if current_status in TERMINAL_STATUSES:
+        logger.warning(
+            "Ignoring stale callback task_id=%s current=%s incoming=%s",
+            task_id,
+            current_status,
+            incoming_status,
+        )
+        return {"status": "ignored", "message": "Task is already in a terminal state."}
+    if STATUS_ORDER.get(incoming_status, 0) < STATUS_ORDER.get(current_status, 0):
+        logger.warning(
+            "Ignoring out-of-order callback task_id=%s current=%s incoming=%s",
+            task_id,
+            current_status,
+            incoming_status,
+        )
+        return {"status": "ignored", "message": "Out-of-order progress update."}
+    if incoming_status == current_status and payload.progress < int(task.get("progress") or 0):
+        return {"status": "ignored", "message": "Progress cannot move backwards."}
 
     update_fields = {
         "status": payload.status,
@@ -219,11 +290,13 @@ async def task_progress_callback(
     }
 
     if payload.error_message:
-        update_fields["error_message"] = payload.error_message
+        update_fields["error_message"] = payload.error_message[:1000]
 
     if payload.status == "completed":
         update_fields["result_video_url"] = payload.result_video_url
+        update_fields["result_video_key"] = payload.result_video_key
         update_fields["events_url"] = payload.events_url
+        update_fields["events_key"] = payload.events_key
         update_fields["lane_volume_total"] = payload.lane_volume_total
         update_fields["global_unique_count"] = payload.global_unique_count
         update_fields["multi_lane_track_count"] = payload.multi_lane_track_count
@@ -250,10 +323,12 @@ async def task_progress_callback(
                 await db.traffic_statistics.insert_many(stat_docs)
 
     # Perform task document update
-    await db.tasks.update_one(
-        {"task_id": task_id},
+    updated = await db.tasks.update_one(
+        {"task_id": task_id, "status": current_status},
         {"$set": update_fields}
     )
+    if not getattr(updated, "matched_count", 0):
+        return {"status": "ignored", "message": "Task state changed before callback was applied."}
 
     return {"status": "success", "message": "Task progress updated successfully."}
 
@@ -263,6 +338,7 @@ async def get_task_result(
     db = Depends(get_database)
 ):
     """Retrieves final video result URL, log file URL, and aggregated statistics."""
+    db = require_database(db)
     task = await find_task(db, task_id)
     if not task:
         raise HTTPException(
@@ -278,30 +354,27 @@ async def get_task_result(
             detail=f"Task is in status '{task['status']}' and has not completed yet."
         )
 
+    # These reads are independent and can share one database wait.
+    lane_config, stats_list = await asyncio.gather(
+        db.lane_configs.find_one({
+            "$or": [{"task_id": actual_task_id}, {"video_id": task.get("video_id")}]
+        }),
+        db.traffic_statistics.find({"task_id": actual_task_id}).to_list(length=1000),
+    )
+
     # Fetch Lane config to get lane names mapping
-    lane_config = await db.lane_configs.find_one({
-        "$or": [{"task_id": actual_task_id}, {"video_id": task.get("video_id")}]
-    })
     lane_names = {}
     if lane_config:
         for lane in lane_config.get("lanes", []):
             lane_names[lane["lane_id"]] = lane.get("name", lane["lane_id"])
 
-    # Fetch and aggregate statistics
-    cursor = db.traffic_statistics.find({"task_id": actual_task_id})
-    stats_list = await cursor.to_list(length=1000)
-
     # Aggregate vehicle counts by lane
     # Structure: lane_id -> { vehicle_type -> total_count }
-    aggregated: Dict[str, Dict[str, int]] = {}
+    aggregated: Dict[str, Dict[str, int]] = defaultdict(dict)
     for stat in stats_list:
         lane_id = stat["lane_id"]
         v_type = stat["vehicle_type"]
         cnt = stat["count"]
-        
-        if lane_id not in aggregated:
-            aggregated[lane_id] = {}
-        
         aggregated[lane_id][v_type] = aggregated[lane_id].get(v_type, 0) + cnt
 
     # Format result response statistics
@@ -331,7 +404,9 @@ async def get_task_result(
         task_id=task["task_id"],
         status=task["status"],
         result_video_url=task.get("result_video_url"),
+        result_video_key=task.get("result_video_key"),
         events_url=task.get("events_url"),
+        events_key=task.get("events_key"),
         statistics=result_statistics,
         total_vehicles=task.get("global_unique_count") or total_vehicles,
         lane_volume_total=task.get("lane_volume_total") or total_vehicles,

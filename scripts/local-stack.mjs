@@ -19,10 +19,10 @@ const env = {
   ...process.env,
   PYTHONPATH: resolve(root, "src"),
   AI_LOCAL: envValue("AI_LOCAL", "true"),
-  CALLBACK_HOST: envValue("CALLBACK_HOST", "http://127.0.0.1:8000"),
+  CALLBACK_HOST: envValue("CALLBACK_HOST", ""),
   REDIS_URL: envValue("REDIS_URL", "redis://127.0.0.1:6379/0"),
-  CELERY_QUEUE_NAME: envValue("CELERY_QUEUE_NAME", "trafficflow_gpu_queue"),
-  CORS_ORIGINS: envValue("CORS_ORIGINS", "http://127.0.0.1:5173"),
+  CELERY_QUEUE_NAME: envValue("CELERY_QUEUE_NAME", "trafficflow_queue"),
+  CORS_ORIGINS: envValue("CORS_ORIGINS", "http://127.0.0.1:8080"),
 };
 
 const children = [];
@@ -74,7 +74,7 @@ function spawnService([name, command, args]) {
 }
 
 console.log("TrafficFlow native local stack started:");
-console.log("  frontend: http://127.0.0.1:5173");
+console.log("  frontend: http://127.0.0.1:8080");
 console.log("  API:      http://127.0.0.1:8000/health");
 console.log(`  worker:   ${commands.some(([name]) => name === "worker") ? "running" : "blocked"}`);
 
