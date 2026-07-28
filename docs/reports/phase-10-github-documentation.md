@@ -6,18 +6,18 @@ PASS. Later Phase 09 completion updated the documentation package; ROI accuracy 
 
 ## Mục tiêu
 
-Convert benchmark outputs into recruiter- and interviewer-readable GitHub documentation without inflated ownership claims.
+Convert benchmark outputs into readable GitHub documentation for general readers and technical reviewers without inflated ownership claims.
 
 ## Phạm vi đã hoàn thành
 
 - Rewrote root `README.md` using the required 16-section structure.
-- Added recruiter overview, AI pipeline explanation, interim error analysis, and limitations pages.
+- Added project overview, AI pipeline explanation, interim error analysis, and limitations pages.
 - Preserved evidence paths for every metric in the README key-results table.
 - Kept team ownership and personal contribution separated.
 
 ## File tạo mới
 
-- `docs/portfolio/recruiter-overview.md`
+- `docs/portfolio/project-overview.md`
 - `docs/portfolio/ai-pipeline.md`
 - `docs/portfolio/error-analysis.md`
 - `docs/portfolio/limitations.md`
@@ -63,7 +63,7 @@ Convert benchmark outputs into recruiter- and interviewer-readable GitHub docume
 
 ## Risks
 
-- Recruiter-facing numbers are strong enough for CV/README. A technical interviewer may ask about ROI; the docs now disclose the GT blocker.
+- Public-facing numbers are strong enough for README/CV use. A technical reviewer may ask about ROI; the docs now disclose the GT blocker.
 
 ## Nội dung cần người dùng review
 

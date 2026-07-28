@@ -10,7 +10,7 @@
 
 This phase measures live runtime and stability only. No live GT was available, so count totals are operational outputs, not accuracy metrics.
 
-Ownership wording: the candidate led bottleneck analysis and AI-runtime validation; live-platform integration remains shared team work.
+Contribution wording: AI-runtime analysis and validation are scoped contribution areas; live-platform integration remains shared team work.
 
 ## Summary Metrics
 

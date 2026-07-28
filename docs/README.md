@@ -1,16 +1,16 @@
 # Documentation
 
-TrafficFlow has detailed engineering notes, but the recommended public reading path is short. Start with the docs below and use the wiki/raw notes only when you need audit history.
+TrafficFlow has detailed engineering notes, but the recommended reading path is short. Start with the docs below and use the wiki/raw notes only when you need audit history.
 
 ## Recommended Reading
 
-| Reader | Start with | Why |
+| Need | Start with | Why |
 |---|---|---|
-| Recruiter | [portfolio/recruiter-overview.md](portfolio/recruiter-overview.md) | One-minute summary, role scope, and measured results |
-| Hiring manager | [portfolio/project-scope-and-ownership.md](portfolio/project-scope-and-ownership.md) | Separates personal AI/CV ownership from team-owned product work |
-| ML/CV interviewer | [portfolio/ai-pipeline.md](portfolio/ai-pipeline.md) and [portfolio/benchmark-methodology.md](portfolio/benchmark-methodology.md) | Explains the pipeline, split policy, metrics, and leakage controls |
-| Runtime reviewer | [portfolio/runtime-optimization-case-study.md](portfolio/runtime-optimization-case-study.md) | Explains live/HLS scheduling and measured stability |
-| Local evaluator | [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) | Native Node.js + Python setup |
+| Project overview | [portfolio/project-overview.md](portfolio/project-overview.md) | Short team summary, contribution areas, and measured results |
+| Team scope | [portfolio/project-scope-and-ownership.md](portfolio/project-scope-and-ownership.md) | Separates team-owned product work from the AI/CV contribution area |
+| AI pipeline details | [portfolio/ai-pipeline.md](portfolio/ai-pipeline.md) and [portfolio/benchmark-methodology.md](portfolio/benchmark-methodology.md) | Explains the pipeline, split policy, metrics, and leakage controls |
+| Runtime details | [portfolio/runtime-optimization-case-study.md](portfolio/runtime-optimization-case-study.md) | Explains live/HLS scheduling and measured stability |
+| Local setup | [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) | Native Node.js + Python setup |
 | API integrator | [API_INTEGRATION.md](API_INTEGRATION.md) and [contracts/](contracts/) | Endpoint, callback, lane config, and result contracts |
 
 ## Evidence Reports
@@ -36,7 +36,7 @@ scripts/        Local orchestration, preflight, and utility scripts
 
 ## Documentation Classification
 
-- `docs/portfolio/`: curated public-facing docs for recruiters and technical interviewers.
+- `docs/portfolio/`: curated project docs for general readers and technical reviewers.
 - `docs/reports/`: concise public summaries of benchmark phases and final review.
 - `docs/contracts/`: API and data contracts that should not change casually.
 - `docs/wiki/`: detailed project memory and design history.

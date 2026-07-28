@@ -1,19 +1,19 @@
 # Portfolio Docs
 
-Use this folder as the public-facing reading path. It is intentionally shorter than the full wiki.
+Use this folder as the short reading path for the project. It is intentionally shorter than the full wiki.
 
 ## Start Here
 
 | Document | Purpose |
 |---|---|
-| [recruiter-overview.md](recruiter-overview.md) | One-minute summary, role scope, and metrics |
-| [project-scope-and-ownership.md](project-scope-and-ownership.md) | What was personally owned versus team-owned |
+| [project-overview.md](project-overview.md) | One-minute team project summary, contribution areas, and metrics |
+| [project-scope-and-ownership.md](project-scope-and-ownership.md) | Team responsibilities and AI/CV contribution boundaries |
 | [ai-pipeline.md](ai-pipeline.md) | How frames become lane-level vehicle counts |
 | [benchmark-methodology.md](benchmark-methodology.md) | Dataset split, metrics, and anti-leakage policy |
 | [runtime-optimization-case-study.md](runtime-optimization-case-study.md) | Live/HLS latency and throughput work |
 | [limitations.md](limitations.md) | What the project does not claim |
 
-## Interview Prep
+## Deeper Notes
 
 | Document | Purpose |
 |---|---|

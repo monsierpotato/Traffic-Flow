@@ -1,8 +1,10 @@
-# TrafficFlow Recruiter Overview
+# TrafficFlow Project Overview
 
 ## One-Minute Summary
 
-TrafficFlow is a five-member team project for lane-level vehicle counting from uploaded videos and live traffic streams. My contribution focused on the computer-vision pipeline: ROI/crop semantics, YOLO detection integration, lane filtering, tracker/counting evaluation, derived counting ground truth, and runtime benchmark reporting.
+TrafficFlow is a five-member team project for lane-level vehicle counting from uploaded videos and live traffic streams. The team built the product workflow across frontend annotation, FastAPI backend services, Celery/Redis processing, storage integration, and the AI counting pipeline.
+
+The AI/CV contribution area covered ROI/crop semantics, YOLO detection integration, lane filtering, tracker/counting evaluation, derived counting ground truth, and runtime benchmark reporting.
 
 ## Key Results
 
@@ -14,17 +16,17 @@ TrafficFlow is a five-member team project for lane-level vehicle counting from u
 | Uploaded-video runtime | 75.829 FPS, 3.033x real time | [Phase 07 upload runtime](../reports/phase-07-upload-runtime.md) |
 | Live/HLS runtime | 14.895 FPS, frame age p95 0.9 ms, 0 dropped frames | [Phase 08 live runtime](../reports/phase-08-live-runtime.md) |
 
-## My Role
+## Team Contribution Areas
 
-Personal ownership:
+AI/CV contribution area:
 
-- Designed and validated the AI-side ROI/crop and coordinate-space behavior.
-- Integrated YOLO/ByteTrack and evaluated model/runtime trade-offs.
-- Built lane/class filtering, lane association, direction validation, and line-crossing counting semantics.
-- Built benchmark runners and reports for detection, tracking, counting, upload runtime, and live runtime.
-- Led live AI-runtime bottleneck analysis and validation.
+- Worked on AI-side ROI/crop and coordinate-space behavior.
+- Contributed YOLO/ByteTrack integration and model/runtime trade-off evaluation.
+- Worked on lane/class filtering, lane association, direction validation, and line-crossing counting semantics.
+- Contributed benchmark runners and reports for detection, tracking, counting, upload runtime, and live runtime.
+- Contributed live AI-runtime bottleneck analysis and validation.
 
-Shared/team-owned areas:
+Shared team areas:
 
 - Product UX and frontend annotation flow.
 - General backend APIs, database/storage integration, and deployment.
