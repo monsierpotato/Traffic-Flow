@@ -14,6 +14,7 @@ os.environ.setdefault("R2_PUBLIC_URL", "http://localhost:8000/static/previews")
 os.environ.setdefault("AI_SERVING_URL", "https://example.com")
 
 import time
+import numpy as np
 
 from api.services.live_service import (
     FfmpegLatestFrameReader,
@@ -50,6 +51,18 @@ def test_raw_reader_joins_short_pipe_reads_into_one_frame():
     reader._proc = _Process(_ShortReadPipe(b"abcdefgh", chunk_size=3))
 
     assert reader._read_exact(8) == b"abcdefgh"
+
+
+def test_latest_reader_hands_off_frame_without_copying():
+    reader = FfmpegLatestFrameReader("unused")
+    frame = np.zeros((2, 3, 3), dtype=np.uint8)
+    reader._latest_frame = frame
+    reader._latest_seq = 1
+
+    ok, item = reader.read_item(timeout=0)
+
+    assert ok is True
+    assert item.frame is frame
 
 
 def test_crop_is_clipped_and_forced_to_even_dimensions():

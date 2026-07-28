@@ -76,7 +76,19 @@ class OpenCvFrameReader:
         self.frames_read = 0
 
     def open(self) -> None:
-        self.cap = cv2.VideoCapture(self.source_url)
+        self.cap = cv2.VideoCapture()
+        # These properties are honored by FFmpeg-backed OpenCV builds and
+        # prevent the fallback reader from waiting forever on a dead source.
+        for prop, value in (
+            (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None), 10_000),
+            (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None), 1_000),
+        ):
+            if prop is not None:
+                try:
+                    self.cap.set(prop, value)
+                except Exception:
+                    pass
+        self.cap.open(self.source_url)
         if not self.cap.isOpened():
             raise RuntimeError("Could not open live source with OpenCV")
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
@@ -104,9 +116,15 @@ class OpenCvFrameReader:
 
 
 class FfmpegLatestFrameReader:
-    def __init__(self, source_url: str, crop_rect: Optional[tuple[int, int, int, int]] = None):
+    def __init__(
+        self,
+        source_url: str,
+        crop_rect: Optional[tuple[int, int, int, int]] = None,
+        source_meta: Optional[tuple[int, int, float]] = None,
+    ):
         self.source_url = source_url
         self.crop_rect = crop_rect
+        self.source_meta = source_meta
         self.width = 0
         self.height = 0
         self.source_width = 0
@@ -126,7 +144,10 @@ class FfmpegLatestFrameReader:
         self._last_error = None
 
     def open(self) -> None:
-        self.source_width, self.source_height, self.fps = _probe_live_source(self.source_url)
+        if self.source_meta:
+            self.source_width, self.source_height, self.fps = self.source_meta
+        else:
+            self.source_width, self.source_height, self.fps = _probe_live_source(self.source_url)
         self.width, self.height = self.source_width, self.source_height
         vf = []
         if self.crop_rect:
@@ -213,11 +234,12 @@ class FfmpegLatestFrameReader:
             if self._latest_frame is None:
                 return False, None
             self._last_delivered_seq = self._latest_seq
-            # Reader and consumer run on separate threads.  Hand out an owned
-            # ndarray so downstream preprocessing/rendering cannot mutate the
-            # producer's latest frame.
+            # The producer publishes a new ndarray for every frame and never
+            # mutates an array after publication. The consumer therefore owns
+            # this reference; copying a full 1080p frame here only adds memory
+            # bandwidth and extends the producer's condition-lock hold time.
             return True, LiveFrameItem(
-                frame=self._latest_frame.copy(),
+                frame=self._latest_frame,
                 captured_at=self._latest_timestamp,
                 seq=self._latest_seq,
                 interarrival_ms=self._latest_interarrival_ms,
@@ -242,12 +264,10 @@ class FfmpegLatestFrameReader:
         assert self._proc is not None and self._proc.stdout is not None
         pacer = FramePacer(pacing_fps) if settings.LIVE_FFMPEG_REALTIME_PACING else None
         last_capture_ts: Optional[float] = None
+        raw_buffer = bytearray(frame_size)
         while not self._stop.is_set():
-            raw = self._read_exact(frame_size)
-            if raw is None:
+            if not self._read_exact_into(raw_buffer):
                 break
-            if len(raw) != frame_size:
-                continue
             if pacer:
                 pacer.wait()
             captured_at = time.monotonic()
@@ -255,7 +275,10 @@ class FfmpegLatestFrameReader:
                 (captured_at - last_capture_ts) * 1000.0 if last_capture_ts is not None else 0.0
             )
             last_capture_ts = captured_at
-            frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
+            # One copy is required to detach the ndarray from the reusable
+            # pipe buffer. Avoid the previous bytearray -> bytes -> ndarray
+            # copy chain and keep the latest-frame slot immutable after handoff.
+            frame = np.frombuffer(raw_buffer, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
             with self._cond:
                 self.frames_read += 1
                 self._latest_seq += 1
@@ -267,19 +290,23 @@ class FfmpegLatestFrameReader:
         with self._cond:
             self._cond.notify_all()
 
-    def _read_exact(self, size: int) -> Optional[bytes]:
+    def _read_exact(self, size: int) -> Optional[bytearray]:
         """Read one complete raw BGR frame; pipe reads may be short."""
-        if size <= 0 or self._proc is None or self._proc.stdout is None:
-            return None
         buffer = bytearray(size)
+        return buffer if self._read_exact_into(buffer) else None
+
+    def _read_exact_into(self, buffer: bytearray) -> bool:
+        """Fill a reusable buffer because pipe reads may be short."""
+        if not buffer or self._proc is None or self._proc.stdout is None:
+            return False
         view = memoryview(buffer)
         offset = 0
-        while offset < size and not self._stop.is_set():
+        while offset < len(buffer) and not self._stop.is_set():
             count = self._proc.stdout.readinto(view[offset:])
             if not count:
-                return None
+                return False
             offset += count
-        return bytes(buffer) if offset == size else None
+        return offset == len(buffer)
 
     def _read_stderr_tail(self) -> str:
         try:
@@ -326,11 +353,19 @@ def _parse_fps(raw: str | None) -> float:
     return float(raw)
 
 
-def _open_live_reader(source_url: str, crop_rect: Optional[tuple[int, int, int, int]] = None):
+def _open_live_reader(
+    source_url: str,
+    crop_rect: Optional[tuple[int, int, int, int]] = None,
+    source_meta: Optional[tuple[int, int, float]] = None,
+):
     prefer = os.environ.get("LIVE_FRAME_READER", settings.LIVE_READER_BACKEND).lower()
     if prefer in ("auto", "ffmpeg"):
         try:
-            reader = FfmpegLatestFrameReader(source_url, crop_rect=crop_rect)
+            reader = FfmpegLatestFrameReader(
+                source_url,
+                crop_rect=crop_rect,
+                source_meta=source_meta,
+            )
             reader.open()
             logger.info(
                 "Live source opened with FFmpeg latest-frame reader: output=%sx%s cropped=%s",
@@ -491,8 +526,10 @@ class LiveSessionManager:
             source_width = 0
             source_height = 0
             source_fps = 25.0
+            source_meta = None
             try:
                 source_width, source_height, source_fps = _probe_live_source(session.source_url)
+                source_meta = (source_width, source_height, source_fps)
             except Exception as exc:
                 logger.warning("Could not probe live source before open; disabling FFmpeg crop-in-reader: %s", exc)
 
@@ -516,7 +553,11 @@ class LiveSessionManager:
                 out_w, out_h = width, height
             live_roi_mode = requested_roi_mode if use_detection_crop else "full_frame"
 
-            cap = _open_live_reader(session.source_url, crop_rect if use_detection_crop else None)
+            cap = _open_live_reader(
+                session.source_url,
+                crop_rect if use_detection_crop else None,
+                source_meta=source_meta,
+            )
             reader_cropped = bool(getattr(cap, "cropped_in_reader", False))
             if width <= 0 or height <= 0:
                 width = int(getattr(cap, "source_width", 0) or cap.width or 0)
@@ -601,6 +642,7 @@ class LiveSessionManager:
             last_tick = time.time()
             last_processed = 0
             frame_idx = 0
+            last_reader_seq = None
             session.model_name = settings.resolved_model_path()
             session.roi_mode = live_roi_mode
             session.ai_imgsz = settings.AI_IMGSZ
@@ -699,7 +741,7 @@ class LiveSessionManager:
 
                 render_start = time.perf_counter()
                 annotated = renderer.draw(
-                    cropped.copy(),
+                    cropped,
                     enriched,
                     session.latest_debug if settings.RENDER_DEBUG else None,
                 )
@@ -805,6 +847,13 @@ class LiveSessionManager:
                     continue
                 reconnect_attempts = 0
                 session.frames_read = max(session.frames_read + 1, getattr(cap, "frames_read", session.frames_read + 1))
+
+                # The FFmpeg reader intentionally keeps only the newest frame.
+                # Count overwritten sequence numbers so telemetry reflects the
+                # real drop pressure instead of only explicit frame skipping.
+                if last_reader_seq is not None and item.seq > last_reader_seq + 1:
+                    session.frames_dropped += item.seq - last_reader_seq - 1
+                last_reader_seq = item.seq
 
                 if frame_idx % frame_skip == 0:
                     process_frame(item, reader_wait_ms)
