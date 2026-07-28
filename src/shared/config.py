@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     # explicit compatibility fallback for deployments that set AI_LOCAL=false.
     AI_LOCAL: bool = Field(default=True)
     AI_SERVING_URL: str = Field(default="https://tienpm205--trafficflow-inference-fastapi-app.modal.run")
+    AI_SERVING_TOKEN: str = Field(default="")
     AI_MODEL_DIR: str = Field(default="inference/models")
     AI_MODEL_PATH: str = Field(default="yolov8n.pt")
     AI_DEVICE: str = Field(default="0")

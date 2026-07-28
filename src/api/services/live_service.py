@@ -606,7 +606,12 @@ class LiveSessionManager:
             if settings.AI_LOCAL or settings.AI_SERVING_URL == "local":
                 ai_client = LocalInferenceClient(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
             else:
-                ai_client = InferenceClient(base_url=settings.AI_SERVING_URL, max_workers=1, request_timeout=30)
+                ai_client = InferenceClient(
+                    base_url=settings.AI_SERVING_URL,
+                    max_workers=1,
+                    request_timeout=30,
+                    api_token=settings.AI_SERVING_TOKEN,
+                )
             ai_client.create_session()
             logger.info(
                 "Live inference ready: session=%s client=%s frame_skip=%s crop=%s lanes=%s",

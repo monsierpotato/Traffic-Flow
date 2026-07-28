@@ -297,6 +297,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
                 base_url=settings.AI_SERVING_URL,
                 max_workers=2,
                 request_timeout=30,
+                api_token=settings.AI_SERVING_TOKEN,
             )
         tracker = LocalTracker(
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
