@@ -44,6 +44,9 @@ kaggle.json
 repos/
 weights/
 *.pt
+!models/yolov8m.pt
+!models/vietnamese_vehicle_detection/
+!models/vietnamese_vehicle_detection/my_finetuned_yolov8.pt
 
 # Node
 node_modules/
