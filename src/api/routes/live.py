@@ -382,7 +382,7 @@ async def stream_live_session_frames(session_id: str):
                 idle_ticks += 1
             if current.status in {'stopped', 'failed', 'ended'} and idle_ticks > 20:
                 break
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(settings.LIVE_STREAM_POLL_INTERVAL_SECONDS)
 
     return StreamingResponse(
         frame_generator(),

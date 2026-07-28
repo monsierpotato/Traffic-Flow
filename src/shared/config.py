@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     LIVE_FFMPEG_RW_TIMEOUT_US: int = Field(default=10000000)
     LIVE_FFMPEG_OUTPUT_FPS: int = Field(default=15)
     LIVE_FFMPEG_REALTIME_PACING: bool = Field(default=True)
+    LIVE_STREAM_POLL_INTERVAL_SECONDS: float = Field(default=0.033, gt=0, le=1)
     LIVE_FRAME_QUEUE_SIZE: int = Field(default=1, ge=1, le=1)
     LIVE_MAX_FRAME_AGE_SECONDS: float = Field(default=0.25, gt=0)
     LIVE_TRACK_MIN_HITS: int = Field(default=3, ge=1)
