@@ -9,6 +9,7 @@ import {
   normalizeSource,
   normalizeTaskStatus,
 } from "./api/client";
+import LandingPage from "./LandingPage";
 
 const STEPS = [
   { id: "upload", label: "Source", icon: "upload_file", help: "Upload a file or resolve a live stream." },
@@ -59,6 +60,7 @@ const emptyDashboardStats = {
 };
 
 function App() {
+  const [showLanding, setShowLanding] = useState(true);
   const [stepIndex, setStepIndex] = useState(0);
   const [activeView, setActiveView] = useState("dashboard");
   const [taskId, setTaskId] = useState("");
@@ -368,9 +370,13 @@ function App() {
     }
   }
 
+  if (showLanding) {
+    return <LandingPage onLaunch={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="app-shell">
-      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} runtimeHealth={runtimeHealth} />
+      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} runtimeHealth={runtimeHealth} onHome={() => setShowLanding(true)} />
       <main className="app-main">
         <SideNav
           taskStatus={taskStatus}
@@ -455,7 +461,7 @@ function App() {
   );
 }
 
-function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtimeHealth }) {
+function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtimeHealth, onHome }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
@@ -479,6 +485,7 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtime
         ))}
       </nav>}
       <div className="top-actions">
+        <button className="console-home-button" onClick={onHome} type="button" title="Back to TrafficFlow overview"><Icon name="arrow_left" /> Overview</button>
         <span className={`deploy-pill health-${runtimeHealth}`} title={runtimeHealth === "online" ? "The API is responding" : "The API health state"}>
           <span className="live-indicator" />
           {runtimeHealth === "online" ? "API online" : runtimeHealth === "checking" ? "Checking API" : "API offline"}
