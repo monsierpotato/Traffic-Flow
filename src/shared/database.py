@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.errors import PyMongoError, ServerSelectionTimeoutError
+from pymongo.errors import OperationFailure, PyMongoError, ServerSelectionTimeoutError
 
 from shared.config import settings
 
@@ -309,6 +309,47 @@ async def _ensure_mongo_indexes(database) -> None:
     for collection, field, options in indexes:
         try:
             await collection.create_index(field, **options)
+        except OperationFailure as exc:
+            # Deployments created before named indexes were introduced may
+            # already have an equivalent index under MongoDB's generated
+            # name (for example, ``task_id_1``).  MongoDB reports that as
+            # IndexOptionsConflict even though the required index is usable.
+            if exc.code == 85:
+                try:
+                    existing_indexes = await collection.index_information()
+                except Exception:
+                    existing_indexes = {}
+
+                matching_index = next(
+                    (
+                        (name, details)
+                        for name, details in existing_indexes.items()
+                        if details.get("key") == [(field, 1)]
+                    ),
+                    None,
+                )
+                if matching_index:
+                    index_name, index_details = matching_index
+                    unique_required = options.get("unique") is True
+                    unique_matches = not unique_required or index_details.get("unique") is True
+                    if unique_matches:
+                        logger.info(
+                            "MongoDB index %s.%s already exists as %s; keeping it",
+                            collection.name,
+                            field,
+                            index_name,
+                        )
+                    else:
+                        logger.warning(
+                            "MongoDB index %s.%s exists as %s but is not unique; "
+                            "manual index migration is required",
+                            collection.name,
+                            field,
+                            index_name,
+                        )
+                    continue
+
+            logger.exception("Could not create MongoDB index %s on %s", options.get("name"), collection.name)
         except Exception:
             # Index creation must not hide an otherwise healthy API startup;
             # MongoDB logs the concrete reason and the next deploy can retry.
