@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import logging
 import os
 import shutil
@@ -19,6 +21,12 @@ from shared.r2_client import r2_client
 logger = logging.getLogger(__name__)
 
 _UPLOAD_COPY_BUFFER = 8 * 1024 * 1024
+_UPLOAD_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="trafficflow-upload")
+
+
+async def _run_blocking(fn, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_UPLOAD_EXECUTOR, partial(fn, *args, **kwargs))
 
 
 @dataclass(frozen=True)
@@ -76,7 +84,7 @@ async def save_upload_to_temp(file: UploadFile) -> str:
     os.close(fd)
     try:
         await file.seek(0)
-        await asyncio.to_thread(_copy_upload_file, file.file, temp_path)
+        await _run_blocking(_copy_upload_file, file.file, temp_path)
         return temp_path
     except Exception:
         try:
@@ -89,7 +97,7 @@ async def save_upload_to_temp(file: UploadFile) -> str:
 async def _delete_uploaded_keys(keys: list[str]) -> None:
     for key in keys:
         try:
-            await asyncio.to_thread(r2_client.delete_file, key)
+            await _run_blocking(r2_client.delete_file, key)
         except Exception:
             logger.warning("Could not delete uploaded key after failure: %s", key)
 
@@ -97,7 +105,7 @@ async def _delete_uploaded_keys(keys: list[str]) -> None:
 async def _unlink_path(path: str | Path | None) -> None:
     if path:
         try:
-            await asyncio.to_thread(os.unlink, path)
+            await _run_blocking(os.unlink, path)
         except FileNotFoundError:
             pass
         except OSError:
@@ -175,7 +183,7 @@ async def create_uploaded_video_task_from_path(
     ingest_started = time.perf_counter()
 
     try:
-        working_path, original_meta, working_meta, transcode_ms, owns_working_path = await asyncio.to_thread(
+        working_path, original_meta, working_meta, transcode_ms, owns_working_path = await _run_blocking(
             normalize_video_path, video_path
         )
 
@@ -185,11 +193,11 @@ async def create_uploaded_video_task_from_path(
 
         if stored_original:
             original_key = f"uploads/{video_id}.mp4"
-            original_url = await asyncio.to_thread(
+            original_url = await _run_blocking(
                 r2_client.upload_path, video_path, original_key, content_type or "video/mp4"
             )
             uploaded_keys.append(original_key)
-            working_url = await asyncio.to_thread(
+            working_url = await _run_blocking(
                 r2_client.upload_path, working_path, working_key, "video/mp4"
             )
             uploaded_keys.append(working_key)
@@ -198,7 +206,7 @@ async def create_uploaded_video_task_from_path(
             original_video_key = original_key
         else:
             working_key = f"uploads/{video_id}.mp4"
-            working_url = await asyncio.to_thread(
+            working_url = await _run_blocking(
                 r2_client.upload_path, working_path, working_key, "video/mp4"
             )
             uploaded_keys.append(working_key)
@@ -209,7 +217,7 @@ async def create_uploaded_video_task_from_path(
 
         preview_started = time.perf_counter()
         try:
-            preview_bytes = await asyncio.to_thread(extract_first_frame_path, working_path)
+            preview_bytes = await _run_blocking(extract_first_frame_path, working_path)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -217,9 +225,9 @@ async def create_uploaded_video_task_from_path(
             ) from exc
 
         preview_key = f"previews/{video_id}.jpg"
-        await asyncio.to_thread(r2_client.upload_file, preview_bytes, preview_key, "image/jpeg")
+        await _run_blocking(r2_client.upload_file, preview_bytes, preview_key, "image/jpeg")
         uploaded_keys.append(preview_key)
-        preview_url = await asyncio.to_thread(_save_local_preview, video_id, preview_bytes, request)
+        preview_url = await _run_blocking(_save_local_preview, video_id, preview_bytes, request)
         preview_ms = (time.perf_counter() - preview_started) * 1000.0
 
         task_doc = _task_document(
@@ -283,7 +291,7 @@ async def create_uploaded_video_task(
     fd, temp_path = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
     try:
-        await asyncio.to_thread(Path(temp_path).write_bytes, video_bytes)
+        await _run_blocking(Path(temp_path).write_bytes, video_bytes)
         return await create_uploaded_video_task_from_path(
             request=request,
             db=db,
