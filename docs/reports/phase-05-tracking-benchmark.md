@@ -6,19 +6,14 @@ PASS, STOP GATE reached on 2026-07-18.
 
 Phase 05 ran an identity-tracking benchmark with TrackEval over UA-DETRAC selected sequences. The benchmark uses oracle GT detections to isolate association behavior from detector errors.
 
-## Outputs
+## Public Evidence
 
 - `benchmark/tracking_eval.py`
-- `benchmark/predictions/tracking/phase05-smoke-trackeval-20260718/`
-- `benchmark/predictions/tracking/phase05-dev-trackeval-oracle-20260718/`
-- `benchmark/predictions/tracking/phase05-heldout-iou-frame-oracle-20260718/`
-- `benchmark/reports/tracking_report.md`
-- `benchmark/reports/tracking_summary.csv`
-- `benchmark/reports/tracking_ablation.csv`
-- `benchmark/reports/tracking_error_examples.csv`
 - `docs/portfolio/tracking-design.md`
 - `docs/reports/phase-05-tracking-benchmark.md`
 - `docs/wiki/ai-workflow/phase-05-tracking-benchmark.md`
+
+Generated local artifacts for this run included TrackEval predictions, tracking summaries, ablation CSVs, and error examples under `benchmark/`.
 
 ## Evaluator
 

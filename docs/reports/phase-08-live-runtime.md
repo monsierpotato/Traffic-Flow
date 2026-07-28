@@ -36,13 +36,12 @@ Ownership wording: the candidate led bottleneck analysis and AI-runtime validati
 | API container RAM start/end/peak MB | 1815.552 / 2132.992 / 2137.088 |
 | Operational lane volume total | 43 |
 
-## Artifacts
+## Public Evidence
 
-- `benchmark/reports/live_runtime_timeseries.csv`
-- `benchmark/reports/live_resource_timeseries.csv`
-- Run manifest: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/manifest.json`
-- Run summary: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/live_runtime_summary.json`
-- API log signal extract: `benchmark/predictions/live_runtime/phase08-live-hls-30min-20260718/api_log_signals.txt`
+- `benchmark/live_runtime_eval.py`
+- `docs/reports/phase-08-live-runtime.md`
+
+Generated local artifacts for this run included live runtime time series, resource samples, run manifest, run summary, and API log extracts under `benchmark/`.
 
 ## Gate
 

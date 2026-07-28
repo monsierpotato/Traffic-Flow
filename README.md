@@ -4,6 +4,8 @@ Video-based traffic analysis for detecting, tracking, and counting vehicles by l
 
 This is a five-person project that runs natively with Node.js and Python on the local machine. Docker/Compose is not part of the project runtime.
 
+**Reviewer path:** start with [docs/portfolio/recruiter-overview.md](docs/portfolio/recruiter-overview.md), then use [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md), [docs/portfolio/benchmark-methodology.md](docs/portfolio/benchmark-methodology.md), and [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) for technical screening.
+
 ---
 
 ## System Architecture
@@ -95,7 +97,7 @@ Input frame
 - **Direction-aware counting**: counts only vehicles moving in the configured direction and ignores opposing traffic
 - **Event semantics**: each counting event contains `video_id`, `lane_id`, `class`, `direction`, `crossing_frame`, and `crossing_time`
 
-Full details: [docs/current/architecture.md](docs/current/architecture.md)
+Full details: [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md)
 
 ---
 
@@ -133,7 +135,7 @@ Audit repository → Freeze baseline → Freeze dataset split (by sequence, not 
 | Uploaded video processing speed | FPS / Real-time factor | 75.8 FPS / 3.03× |
 | Live stream (30-minute soak) | FPS / Frame age p95 / Drop | 14.9 FPS / 0.9 ms / 0% |
 
-Operations documentation: [docs/current/](docs/current/)
+Benchmark evidence: [docs/reports/](docs/reports/)
 
 ---
 
@@ -212,14 +214,19 @@ The repository is configured so Vercel builds only `frontend/`; the Python API a
 
 ## Documentation
 
-| Document | Contents |
+The docs folder is intentionally split into a short reviewer path and deeper engineering references. Most readers should not need to read every file.
+
+| Start here | Contents |
 | --- | --- |
-| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Detailed deployment and usage guide |
-| [docs/VERCEL_FRONTEND_DEPLOYMENT.md](docs/VERCEL_FRONTEND_DEPLOYMENT.md) | Vercel frontend deployment |
-| [docs/current/](docs/current/) | Current architecture and runbook |
-| [docs/API_INTEGRATION.md](docs/API_INTEGRATION.md) | API, task state machine, and callbacks |
-| [docs/contracts/](docs/contracts/) | API contracts, lane configuration, progress callbacks, and results |
-| [benchmark/](benchmark/) | Detection, tracking, counting, and runtime benchmarks |
+| [docs/portfolio/recruiter-overview.md](docs/portfolio/recruiter-overview.md) | One-minute project summary, scoped ownership, and key measured results |
+| [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) | Team split and personal AI/CV ownership boundaries |
+| [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md) | Detector, tracker, lane filtering, and counting design |
+| [docs/portfolio/benchmark-methodology.md](docs/portfolio/benchmark-methodology.md) | Split policy, metrics, and anti-leakage rules |
+| [docs/reports/](docs/reports/) | Public benchmark phase summaries behind the README metrics |
+| [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) | Native local setup |
+| [docs/API_INTEGRATION.md](docs/API_INTEGRATION.md) | API, task state machine, and callback contracts |
+
+Deep references such as [docs/wiki/](docs/wiki/) and [docs/raw/](docs/raw/) are retained for audit history, not as the recommended first reading path.
 
 ---
 

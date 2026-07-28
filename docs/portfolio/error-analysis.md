@@ -6,13 +6,14 @@ Phase 09 completed as `PARTIAL PASS`.
 
 This page summarizes the formal Phase 09 taxonomy generated from frozen Phase 04-08 artifacts. Tracker and live scheduling ablations are evidenced; ROI accuracy ablation is blocked until the UA-DETRAC benchmark has frozen crop ROI GT per sequence.
 
-Primary artifacts:
+Public evidence:
 
-- `benchmark/reports/ablation_report.md`
-- `benchmark/reports/ablation_summary.csv`
-- `benchmark/reports/error_taxonomy.csv`
-- `benchmark/reports/phase09_error_examples.csv`
-- `benchmark/reports/phase09_error_frames/`
+- [Phase 09 ablation and error analysis](../reports/phase-09-ablation-error-analysis.md)
+- [End-to-end ByteTrack vs production comparison](../reports/end-to-end-bytetrack-production-comparison.md)
+- [Phase 04 detection benchmark](../reports/phase-04-detection-benchmark.md)
+- [Phase 08 live runtime benchmark](../reports/phase-08-live-runtime.md)
+
+The generated CSVs and representative frames are local benchmark artifacts, not part of the curated public reading path.
 
 ## Ablation Summary
 
@@ -44,7 +45,7 @@ Primary artifacts:
 
 ## Representative Examples
 
-Representative frames are generated under `benchmark/reports/phase09_error_frames/`, with trace rows in `benchmark/reports/phase09_error_examples.csv`.
+Representative frames and trace rows were generated during Phase 09 and summarized in [the public Phase 09 report](../reports/phase-09-ablation-error-analysis.md).
 
 Examples include:
 

@@ -45,10 +45,10 @@ Convert benchmark outputs into recruiter- and interviewer-readable GitHub docume
 
 | Metric | Value | Run ID | Evidence |
 |---|---:|---|---|
-| Held-out detection AP50 / recall | 0.5820 / 0.6791 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `benchmark/reports/detection_report.md` |
-| Held-out E2E Event F1 / WAPE, ByteTrack | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `benchmark/reports/end_to_end_report.md` |
-| Uploaded-video FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `benchmark/reports/batch_runtime_report.md` |
-| Live FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `benchmark/reports/live_runtime_report.md` |
+| Held-out detection AP50 / recall | 0.5820 / 0.6791 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `docs/reports/phase-04-detection-benchmark.md` |
+| Held-out E2E Event F1 / WAPE, ByteTrack | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `docs/reports/end-to-end-bytetrack-production-comparison.md` |
+| Uploaded-video FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `docs/reports/phase-07-upload-runtime.md` |
+| Live FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `docs/reports/phase-08-live-runtime.md` |
 
 ## Quyết định kỹ thuật
 
