@@ -82,7 +82,8 @@ class SessionStore:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    store._sessions.clear()
+    if store is not None:
+        store._sessions.clear()
 
 
 app = FastAPI(title="TrafficFlow Model Serving", version="0.2.0",
@@ -244,6 +245,14 @@ async def detect_raw(
     ]
 
     return RawDetectResponse(detections=detections)
+
+
+# The worker client historically used the /v1 prefix. Keep these aliases
+# during the migration so a serving rollout cannot break in-flight workers.
+app.add_api_route("/v1/session", create_session, methods=["POST"], response_model=SessionCreateResponse, include_in_schema=False)
+app.add_api_route("/v1/session/{session_id}", delete_session, methods=["DELETE"], include_in_schema=False)
+app.add_api_route("/v1/detect", detect, methods=["POST"], response_model=DetectResponse, include_in_schema=False)
+app.add_api_route("/v1/detect/raw", detect_raw, methods=["POST"], response_model=RawDetectResponse, include_in_schema=False)
 
 
 # ---------------------------------------------------------------------------

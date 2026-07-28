@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from datetime import datetime
@@ -8,12 +9,33 @@ from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path
 from api.schemas.upload import UploadResponse
+from shared.config import settings
 
 router = APIRouter()
 
 # --- Chunked upload ---
 
-CHUNK_DIR = Path("storage/chunks")
+CHUNK_DIR = Path(settings.STORAGE_DIR) / "chunks"
+MAX_CHUNK_COUNT = 10_000
+
+
+def _validate_upload_id(upload_id: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", upload_id):
+        raise HTTPException(status_code=400, detail="Invalid upload_id")
+
+
+def _validate_chunk_request(upload_id: str, chunk_index: int, total_chunks: int, filename: str) -> None:
+    _validate_upload_id(upload_id)
+    if total_chunks < 1 or total_chunks > MAX_CHUNK_COUNT:
+        raise HTTPException(status_code=400, detail=f"total_chunks must be between 1 and {MAX_CHUNK_COUNT}")
+    if chunk_index < 0 or chunk_index >= total_chunks:
+        raise HTTPException(status_code=400, detail="chunk_index must be within total_chunks")
+    extension = Path(filename or "").suffix.lower()
+    if extension not in settings.ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file extension {extension}. Allowed extensions: {', '.join(settings.ALLOWED_VIDEO_EXTENSIONS)}",
+        )
 
 
 async def _save_upload_to_temp(file: UploadFile) -> str:
@@ -35,35 +57,69 @@ async def _save_upload_to_temp(file: UploadFile) -> str:
 
 @router.post("/video/chunk")
 async def upload_chunk(
-    request: Request,
     upload_id: str = Form(...),
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
     filename: str = Form(...),
     file: UploadFile = File(...),
 ):
+    _validate_chunk_request(upload_id, chunk_index, total_chunks, filename)
     CHUNK_DIR.mkdir(parents=True, exist_ok=True)
     upload_dir = CHUNK_DIR / upload_id
     upload_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = upload_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="Upload metadata is invalid") from exc
+        if existing_meta.get("total_chunks") != total_chunks or existing_meta.get("filename") != filename:
+            raise HTTPException(status_code=409, detail="Chunk metadata does not match the upload session")
 
     chunk_path = upload_dir / f"{chunk_index:06d}"
-    chunk_bytes = await file.read()
-    chunk_path.write_bytes(chunk_bytes)
+    temporary_chunk_path = upload_dir / f".{chunk_index:06d}.tmp"
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    size = 0
+    try:
+        with temporary_chunk_path.open("wb") as target:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Chunk exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB",
+                    )
+                target.write(chunk)
+        os.replace(temporary_chunk_path, chunk_path)
+    except Exception:
+        if temporary_chunk_path.exists():
+            temporary_chunk_path.unlink()
+        raise
 
     # Save metadata on first chunk
-    meta_path = upload_dir / "meta.json"
     if not meta_path.exists():
-        meta_path.write_text(json.dumps({
+        metadata = json.dumps({
             "filename": filename,
             "total_chunks": total_chunks,
             "created_at": datetime.utcnow().isoformat(),
-        }))
+        })
+        temporary_meta_path = upload_dir / ".meta.json.tmp"
+        temporary_meta_path.write_text(metadata, encoding="utf-8")
+        os.replace(temporary_meta_path, meta_path)
 
     return {"upload_id": upload_id, "chunk": chunk_index, "status": "ok"}
 
 
 @router.post("/video/chunk/{upload_id}/complete")
-async def complete_chunked_upload(request: Request, upload_id: str, db=Depends(get_database)):
+async def complete_chunked_upload(
+    upload_id: str,
+    request: Request,
+    db=Depends(get_database),
+):
+    _validate_upload_id(upload_id)
     upload_dir = CHUNK_DIR / upload_id
     if not upload_dir.exists():
         raise HTTPException(404, "Upload session not found")
@@ -75,22 +131,35 @@ async def complete_chunked_upload(request: Request, upload_id: str, db=Depends(g
     meta = json.loads(meta_path.read_text())
     total_chunks = meta["total_chunks"]
     filename = meta.get("filename", "video.mp4")
+    _validate_chunk_request(upload_id, 0, total_chunks, filename)
 
     # Reassemble
-    chunks = sorted(upload_dir.glob("*"))
-    chunks = [c for c in chunks if c.name.isdigit()]
-    if len(chunks) != total_chunks:
-        raise HTTPException(400, f"Missing chunks: {len(chunks)}/{total_chunks}")
+    expected_names = {f"{index:06d}" for index in range(total_chunks)}
+    chunk_files = {path.name: path for path in upload_dir.iterdir() if path.name.isdigit()}
+    missing = sorted(expected_names - chunk_files.keys())
+    unexpected = sorted(chunk_files.keys() - expected_names)
+    if missing or unexpected:
+        detail = f"Missing chunks: {len(missing)}; unexpected chunks: {len(unexpected)}"
+        raise HTTPException(400, detail)
+    chunks = [chunk_files[name] for name in sorted(expected_names)]
 
     temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix or ".mp4")
     temp_path = temp_video.name
     try:
+        total_size = 0
+        max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
         for chunk in chunks:
             with chunk.open("rb") as fp:
                 while True:
                     data = fp.read(1024 * 1024)
                     if not data:
                         break
+                    total_size += len(data)
+                    if total_size > max_bytes:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=f"Combined upload exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB",
+                        )
                     temp_video.write(data)
         temp_video.close()
 
@@ -151,4 +220,3 @@ async def upload_video(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while uploading: {str(e)}"
         )
-

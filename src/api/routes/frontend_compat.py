@@ -13,6 +13,7 @@ from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path
 from api.schemas.task import TaskCreateRequest
+from api.schemas.lane import LaneConfigRequest
 from api.routes.tasks import process_task, get_task_status, get_task_result
 
 router = APIRouter()
@@ -96,6 +97,16 @@ async def compat_submit(request: Request, payload: dict):
     # Save lane config if provided by frontend
     if lane_config:
         cfg = dict(lane_config)
+        cfg["video_id"] = video_id
+        try:
+            # The compatibility endpoint receives an untyped JSON body, so it
+            # must apply the same contract as /api/v1/lanes/config before the
+            # document can reach the worker.
+            validated_cfg = LaneConfigRequest.model_validate(cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Invalid lane configuration") from exc
+
+        cfg = validated_cfg.model_dump()
         cfg["video_id"] = video_id
         cfg["task_id"] = task_id
         cfg["created_at"] = datetime.utcnow()

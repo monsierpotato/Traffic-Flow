@@ -14,10 +14,15 @@ class Settings(BaseSettings):
     MONGODB_URI: str = Field(default="mongodb://localhost:27017/")
     MONGODB_DB_NAME: str = Field(default="trafficflow")
     MONGODB_LOCAL_FALLBACK: bool = Field(default=True)
+    MONGODB_TLS: bool = Field(default=False)
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=5000, ge=100, le=120000)
+    MONGODB_CONNECT_TIMEOUT_MS: int = Field(default=5000, ge=100, le=120000)
     LOCAL_DB_PATH: str = Field(default="storage/local_db.json")
     YTDLP_COOKIES_FILE: str = Field(default="")
     YTDLP_JS_RUNTIME: str = Field(default="")
     YTDLP_REMOTE_COMPONENTS: str = Field(default="")
+    YTDLP_TIMEOUT_SECONDS: int = Field(default=45, ge=5, le=300)
+    YTDLP_REFRESH_MARGIN_SECONDS: int = Field(default=120, ge=0, le=3600)
 
     # Live stream ingest configuration
     LIVE_READER_BACKEND: str = Field(default="auto")  # auto | ffmpeg | opencv
@@ -35,6 +40,11 @@ class Settings(BaseSettings):
     LIVE_TRACK_RESET_GAP_SECONDS: float = Field(default=1.0, gt=0)
     LIVE_RECONNECT_ATTEMPTS: int = Field(default=3, ge=0)
     LIVE_RECONNECT_DELAY_SECONDS: float = Field(default=1.0, ge=0)
+    LIVE_PREVIEW_TIMEOUT_SECONDS: int = Field(default=20, ge=5, le=120)
+    LIVE_SOURCE_TTL_SECONDS: int = Field(default=3600, ge=60)
+    LIVE_SESSION_RETENTION_SECONDS: int = Field(default=600, ge=30)
+    LIVE_MAX_SESSIONS: int = Field(default=2, ge=1, le=32)
+    LIVE_BLOCK_PRIVATE_HOSTS: bool = Field(default=True)
 
     # Cloudflare R2 configurations
     R2_ACCOUNT_ID: str = Field(default="placeholder_account_id")

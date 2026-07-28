@@ -36,6 +36,9 @@ celery_app.conf.update(
     enable_utc=True,
     task_ignore_result=True,
     task_store_errors_even_if_ignored=False,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True,
     task_default_queue=settings.CELERY_QUEUE_NAME,
 )
 
@@ -50,7 +53,7 @@ def _send_callback(url: str, payload: dict):
         headers={"Content-Type": "application/json"}, method="PUT",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             logger.info(f"Callback {resp.status}")
     except Exception as e:
         logger.error(f"Callback failed: {e}")
@@ -206,7 +209,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        counter = CountingState(lanes_processing)
+        counter = CountingState(lanes_processing, settings=lane_config.get("settings"))
         renderer = FrameRenderer(lanes_processing, settings_obj=settings)
 
         # Stabilisation reference frame
@@ -228,7 +231,11 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Output video ---
         f_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         temp_out_path = f_out.name; f_out.close()
-        fourcc = cv2.VideoWriter_fourcc(*"vp90")
+        # VP9 in an MP4 container is poorly supported by browsers and many
+        # downstream players. Prefer the broadly compatible MPEG-4 fallback;
+        # deployments with an H.264-enabled OpenCV build can override this
+        # through the existing transcode stage.
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out_video = cv2.VideoWriter(temp_out_path, fourcc, fps, (out_w, out_h))
 
         # --- Process frames ---

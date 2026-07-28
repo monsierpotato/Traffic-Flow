@@ -15,7 +15,13 @@ os.environ.setdefault("AI_SERVING_URL", "https://example.com")
 
 import time
 
-from api.services.live_service import FfmpegLatestFrameReader, FramePacer, _normalize_even_crop_rect
+from api.services.live_service import (
+    FfmpegLatestFrameReader,
+    FramePacer,
+    LiveSessionManager,
+    LiveSessionState,
+    _normalize_even_crop_rect,
+)
 from worker.pipeline.tracker import LocalTracker
 
 
@@ -76,3 +82,28 @@ def test_live_tracker_expires_lost_track_by_elapsed_time():
     tracker.update([{"bbox_xyxy": [0, 0, 50, 50], "class_name": "car"}], timestamp=10.0)
 
     assert tracker.update([], timestamp=10.8) == []
+
+
+def test_live_session_snapshot_does_not_expose_signed_media_url():
+    session = LiveSessionState(
+        session_id="session",
+        source_url="https://manifest.googlevideo.com/video.m3u8?expire=9999&sig=secret",
+        source_origin_url="https://www.youtube.com/live/example",
+    )
+
+    snapshot = session.snapshot()
+
+    assert snapshot["source_url"] == "https://www.youtube.com/live/example"
+    assert "googlevideo" not in snapshot["source_url"]
+
+
+def test_live_manager_cleanup_stale_terminal_sessions(monkeypatch):
+    manager = LiveSessionManager()
+    session = LiveSessionState(session_id="old", source_url="http://example.test/live.m3u8")
+    session.status = "ended"
+    session.updated_at = 1.0
+    manager._sessions[session.session_id] = session
+    monkeypatch.setattr("api.services.live_service.time.time", lambda: 10000.0)
+
+    assert manager.cleanup_stale() == 1
+    assert manager.get("old") is None

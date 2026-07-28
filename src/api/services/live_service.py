@@ -22,6 +22,7 @@ from worker.pipeline.renderer import FrameRenderer
 from worker.pipeline.detection_filter import filter_detections_for_tracking
 from worker.pipeline.tracker import LocalTracker
 from worker.services.counting_service import CountingState
+from api.services.youtube_resolver import media_url_needs_refresh, redact_process_detail, resolve_youtube_url
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +194,7 @@ class FfmpegLatestFrameReader:
             if self._proc.poll() is not None:
                 break
         self.release()
-        raise RuntimeError(
-            f"Could not read first frame with FFmpeg for {self.source_url} (stderr suppressed)."
-        )
+        raise RuntimeError("Could not read the first frame with FFmpeg")
 
     def read(self, timeout: float = 1.0):
         ok, item = self.read_item(timeout=timeout)
@@ -303,7 +302,8 @@ def _probe_live_source(source_url: str) -> tuple[int, int, float]:
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=settings.LIVE_FFPROBE_TIMEOUT_S)
     if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {result.stderr.strip()}")
+        detail = redact_process_detail(result.stderr)
+        raise RuntimeError(f"ffprobe failed: {detail or 'source probe returned a non-zero status'}")
     payload = json.loads(result.stdout or "{}")
     streams = payload.get("streams") or []
     if not streams:
@@ -353,6 +353,8 @@ def _open_live_reader(source_url: str, crop_rect: Optional[tuple[int, int, int, 
 class LiveSessionState:
     session_id: str
     source_url: str
+    source_origin_url: Optional[str] = None
+    source_expires_at: Optional[float] = None
     status: str = "starting"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -380,7 +382,8 @@ class LiveSessionState:
     def snapshot(self) -> dict:
         return {
             "session_id": self.session_id,
-            "source_url": self.source_url,
+            # Do not expose signed googlevideo URLs to the browser or logs.
+            "source_url": self.source_origin_url or self.source_url,
             "status": self.status,
             "uptime_s": round(time.time() - self.created_at, 1),
             "frames_read": self.frames_read,
@@ -408,8 +411,20 @@ class LiveSessionManager:
         self._sessions: Dict[str, LiveSessionState] = {}
         self._lock = threading.Lock()
 
-    def create(self, source_url: str, lane_config: Optional[dict], frame_skip: int = 1) -> LiveSessionState:
-        session = LiveSessionState(session_id=str(uuid.uuid4()), source_url=source_url)
+    def create(
+        self,
+        source_url: str,
+        lane_config: Optional[dict],
+        frame_skip: int = 1,
+        source_origin_url: Optional[str] = None,
+        source_expires_at: Optional[float] = None,
+    ) -> LiveSessionState:
+        session = LiveSessionState(
+            session_id=str(uuid.uuid4()),
+            source_url=source_url,
+            source_origin_url=source_origin_url,
+            source_expires_at=source_expires_at,
+        )
         with self._lock:
             self._sessions[session.session_id] = session
         session.thread = threading.Thread(
@@ -427,6 +442,22 @@ class LiveSessionManager:
     def list(self) -> list[LiveSessionState]:
         with self._lock:
             return list(self._sessions.values())
+
+    def cleanup_stale(self) -> int:
+        """Remove terminal sessions after their metrics retention window."""
+        cutoff = time.time() - settings.LIVE_SESSION_RETENTION_SECONDS
+        removed = 0
+        with self._lock:
+            for session_id, session in list(self._sessions.items()):
+                if session.status not in {"stopped", "failed", "ended"}:
+                    continue
+                if session.updated_at >= cutoff:
+                    continue
+                if session.thread and session.thread.is_alive():
+                    continue
+                self._sessions.pop(session_id, None)
+                removed += 1
+        return removed
 
     def stop(self, session_id: str) -> bool:
         session = self.get(session_id)
@@ -451,6 +482,10 @@ class LiveSessionManager:
         cap = None
         ai_client = None
         try:
+            if session.source_origin_url and media_url_needs_refresh(session.source_expires_at):
+                refreshed = resolve_youtube_url(session.source_origin_url)
+                session.source_url = refreshed.url
+                session.source_expires_at = refreshed.expires_at
             requested_roi_mode = lane_config.get("roi_mode") or os.environ.get("LIVE_ROI_MODE") or settings.ROI_MODE
             processing_roi = lane_config.get("crop_rect_padded") or lane_config.get("processing_roi") or lane_config.get("annotation_roi")
             source_width = 0
@@ -489,9 +524,8 @@ class LiveSessionManager:
                 out_w, out_h = int(cap.width or width), int(cap.height or height)
             source_fps = cap.fps or source_fps
             logger.info(
-                "Live source opened: session=%s source=%s source=%sx%s output=%sx%s @ %.2f crop_in_reader=%s",
+                "Live source opened: session=%s source=%sx%s output=%sx%s @ %.2f crop_in_reader=%s",
                 session.session_id,
-                session.source_url,
                 width,
                 height,
                 int(cap.width or out_w),
@@ -549,7 +583,7 @@ class LiveSessionManager:
                 min_hits=settings.LIVE_TRACK_MIN_HITS,
                 max_lost_seconds=settings.LIVE_TRACK_MAX_LOST_SECONDS,
             )
-            counter = CountingState(lanes_processing) if lanes_processing else None
+            counter = CountingState(lanes_processing, settings=lane_config.get("settings")) if lanes_processing else None
             session.counts = _empty_counts(lanes_processing or [])
             if settings.AI_LOCAL or settings.AI_SERVING_URL == "local":
                 ai_client = LocalInferenceClient(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
@@ -579,7 +613,7 @@ class LiveSessionManager:
                 nonlocal counter, last_tracking_ts
                 logger.warning("Resetting live runtime state: session=%s reason=%s", session.session_id, reason)
                 tracker.reset()
-                counter = CountingState(lanes_processing) if lanes_processing else None
+                counter = CountingState(lanes_processing, settings=lane_config.get("settings")) if lanes_processing else None
                 session.counts = _empty_counts(lanes_processing or [])
                 session.lane_volume_total = 0
                 session.global_unique_count = 0
@@ -749,6 +783,15 @@ class LiveSessionManager:
                             session.stop_event.wait(settings.LIVE_RECONNECT_DELAY_SECONDS)
                         if session.stop_event.is_set():
                             break
+                        if session.source_origin_url:
+                            refreshed = resolve_youtube_url(session.source_origin_url)
+                            session.source_url = refreshed.url
+                            session.source_expires_at = refreshed.expires_at
+                            logger.info(
+                                "Refreshed YouTube media URL before reconnect: session=%s expires_at=%s",
+                                session.session_id,
+                                refreshed.expires_at,
+                            )
                         replacement = _open_live_reader(session.source_url, crop_rect if use_detection_crop else None)
                         replacement_size = (int(replacement.width or 0), int(replacement.height or 0))
                         expected_size = (int(out_w), int(out_h))

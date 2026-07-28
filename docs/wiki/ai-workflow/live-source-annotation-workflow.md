@@ -7,8 +7,8 @@ Live traffic counting cannot start from a raw URL alone. Counting requires camer
 ## Workflow
 
 1. User pastes a source URL in the webapp: YouTube page, HLS `.m3u8`, RTSP, MJPEG, or direct video URL.
-2. Backend `/live/resolve` resolves YouTube URLs with `yt-dlp`; other direct stream URLs pass through.
-3. Backend validates the source with OpenCV, captures a preview frame, and returns source metadata.
+2. Backend `/live/resolve` resolves YouTube URLs with `yt-dlp`; other direct stream URLs pass through after source validation.
+3. Backend validates the source with a bounded FFmpeg preview capture and returns source metadata plus a source ID. Signed YouTube media URLs stay server-side.
 4. Frontend displays the snapshot and reuses the existing ROI and lane annotation tools.
 5. Frontend sends the lane config to `/live/validate-config`.
 6. Only valid configs can start `/live/sessions`.
@@ -26,13 +26,13 @@ Live traffic counting cannot start from a raw URL alone. Counting requires camer
 
 ## YouTube Notes
 
-`yt-dlp` is used only during source resolution, not inside the live loop. Resolved YouTube media URLs may expire and can require cookies/login for some streams. Production camera integrations should prefer RTSP/HLS/MJPEG/direct camera URLs.
+`yt-dlp` is used during source resolution and again when a YouTube media URL needs refreshing; it is not used for every live frame. The session keeps the original YouTube page URL and can re-resolve it after a signed media URL expires or an FFmpeg reconnect is needed. Production camera integrations should prefer RTSP/HLS/MJPEG/direct camera URLs.
 
 ## Validation
 
 Smoke tests confirmed:
 
-- `/live/resolve` captures a preview from a direct local video source.
+- `/live/resolve` captures a preview from a direct source with the bounded FFmpeg preview path.
 - `/live/sources/{source_id}/preview` returns the snapshot image.
 - `/live/validate-config` accepts a complete config and reports errors for missing geometry.
 
@@ -58,4 +58,4 @@ YTDLP_JS_RUNTIME=node
 YTDLP_REMOTE_COMPONENTS=ejs:github
 ```
 
-Do not commit cookies. Treat `cookies.txt` as sensitive account material.
+Do not commit cookies. Treat `cookies.txt` as sensitive account material. The resolver copies cookies to a private temporary file for the `yt-dlp` subprocess and removes that copy when resolution finishes; cookies must not be placed below the `/static` storage directory.

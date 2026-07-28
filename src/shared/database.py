@@ -1,7 +1,9 @@
 import copy
 import json
 import logging
+import os
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -37,7 +39,7 @@ class LocalCursor:
 
     def sort(self, key: str, direction: int = 1):
         reverse = direction < 0
-        self._docs.sort(key=lambda doc: doc.get(key), reverse=reverse)
+        self._docs.sort(key=lambda doc: (doc.get(key) is None, doc.get(key)), reverse=reverse)
         return self
 
     def limit(self, count: int):
@@ -58,24 +60,7 @@ class LocalJsonCollection:
         return self._database._data.setdefault(self._name, [])
 
     def _matches(self, doc: dict, query: Optional[dict]) -> bool:
-        if not query:
-            return True
-        for key, expected in query.items():
-            actual = doc.get(key)
-            if isinstance(expected, dict):
-                if "$lt" in expected and not (actual is not None and actual < expected["$lt"]):
-                    return False
-                if "$lte" in expected and not (actual is not None and actual <= expected["$lte"]):
-                    return False
-                if "$gt" in expected and not (actual is not None and actual > expected["$gt"]):
-                    return False
-                if "$gte" in expected and not (actual is not None and actual >= expected["$gte"]):
-                    return False
-                if "$in" in expected and actual not in expected["$in"]:
-                    return False
-            elif actual != expected:
-                return False
-        return True
+        return _matches_query(doc, query)
 
     async def insert_one(self, doc: dict):
         async with self._database.lock:
@@ -142,7 +127,27 @@ class LocalJsonCollection:
             return sum(1 for doc in self._docs() if self._matches(doc, query))
 
     def aggregate(self, pipeline: list):
-        return LocalCursor([])
+        docs = [copy.deepcopy(doc) for doc in self._docs()]
+        for stage in pipeline or []:
+            if "$match" in stage:
+                docs = [doc for doc in docs if _matches_query(doc, stage["$match"])]
+            elif "$group" in stage:
+                spec = stage["$group"]
+                id_expression = spec.get("_id")
+                sum_expression = next(
+                    (value["$sum"] for key, value in spec.items() if key != "_id" and isinstance(value, dict) and "$sum" in value),
+                    None,
+                )
+                grouped: dict[Any, dict] = {}
+                for doc in docs:
+                    group_id = doc.get(id_expression[1:]) if isinstance(id_expression, str) and id_expression.startswith("$") else id_expression
+                    row = grouped.setdefault(group_id, {"_id": group_id})
+                    if sum_expression:
+                        field = sum_expression[1:] if isinstance(sum_expression, str) and sum_expression.startswith("$") else None
+                        row_key = next((key for key in spec if key != "_id"), "total")
+                        row[row_key] = row.get(row_key, 0) + (int(doc.get(field) or 0) if field else int(sum_expression or 0))
+                docs = list(grouped.values())
+        return LocalCursor(docs)
 
 
 class LocalJsonDatabase:
@@ -171,14 +176,18 @@ class LocalJsonDatabase:
             try:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
                 self._counter = int(payload.get("_counter", 0))
-                self._data = {k: v for k, v in payload.items() if k != "_counter"}
+                self._data = {k: _restore_dates(v, k) for k, v in payload.items() if k != "_counter"}
             except Exception as exc:
                 logger.warning("Could not read local DB %s: %s", self.path, exc)
                 self._data = {}
 
     def save(self):
         payload = {"_counter": self._counter, **self._data}
-        self.path.write_text(json.dumps(payload, default=str, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2)
+        temporary_path = self.path.with_name(f".{self.path.name}.tmp")
+        temporary_path.write_text(serialized, encoding="utf-8")
+        os.replace(temporary_path, self.path)
 
 
 class _AsyncThreadLock:
@@ -202,19 +211,75 @@ class Database:
 db_instance = Database()
 
 
+def _matches_query(doc: dict, query: Optional[dict]) -> bool:
+    if not query:
+        return True
+    for key, expected in query.items():
+        if key == "$or":
+            if not any(_matches_query(doc, branch) for branch in expected):
+                return False
+            continue
+        if key == "$and":
+            if not all(_matches_query(doc, branch) for branch in expected):
+                return False
+            continue
+        actual = doc.get(key)
+        if isinstance(expected, dict):
+            for operator, operand in expected.items():
+                try:
+                    if operator == "$lt" and not (actual is not None and actual < operand):
+                        return False
+                    if operator == "$lte" and not (actual is not None and actual <= operand):
+                        return False
+                    if operator == "$gt" and not (actual is not None and actual > operand):
+                        return False
+                    if operator == "$gte" and not (actual is not None and actual >= operand):
+                        return False
+                    if operator == "$in" and actual not in operand:
+                        return False
+                    if operator == "$ne" and actual == operand:
+                        return False
+                except TypeError:
+                    return False
+        elif actual != expected:
+            return False
+    return True
+
+
+def _json_default(value: Any):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _restore_dates(value: Any, key: Optional[str] = None):
+    if isinstance(value, dict):
+        return {child_key: _restore_dates(child_value, child_key) for child_key, child_value in value.items()}
+    if isinstance(value, list):
+        return [_restore_dates(child, key) for child in value]
+    if isinstance(value, str) and key and (key.endswith("_at") or key.endswith("_date")):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return value
+    return value
+
+
 async def connect_to_mongo():
     logger.info("Connecting to MongoDB Atlas...")
-    client = AsyncIOMotorClient(
-        settings.MONGODB_URI,
-        tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-    )
+    client_options = {
+        "serverSelectionTimeoutMS": settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+        "connectTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+    }
+    if settings.MONGODB_TLS or settings.MONGODB_URI.startswith("mongodb+srv://"):
+        client_options["tlsCAFile"] = certifi.where()
+    client = AsyncIOMotorClient(settings.MONGODB_URI, **client_options)
     try:
         await client.admin.command("ping")
         db_instance.client = client
         db_instance.db = client[settings.MONGODB_DB_NAME]
         db_instance.using_local_fallback = False
+        await _ensure_mongo_indexes(db_instance.db)
         logger.info("Connected to MongoDB successfully!")
     except (ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
         client.close()
@@ -230,12 +295,34 @@ async def connect_to_mongo():
         )
 
 
+async def _ensure_mongo_indexes(database) -> None:
+    """Create the query indexes used by task polling and result aggregation."""
+    indexes = (
+        (database.tasks, "task_id", {"unique": True, "name": "uq_tasks_task_id"}),
+        (database.tasks, "video_id", {"name": "ix_tasks_video_id"}),
+        (database.tasks, "status", {"name": "ix_tasks_status"}),
+        (database.tasks, "expires_at", {"name": "ix_tasks_expires_at"}),
+        (database.lane_configs, "video_id", {"unique": True, "name": "uq_lane_configs_video_id"}),
+        (database.lane_configs, "task_id", {"name": "ix_lane_configs_task_id"}),
+        (database.traffic_statistics, "task_id", {"name": "ix_traffic_statistics_task_id"}),
+    )
+    for collection, field, options in indexes:
+        try:
+            await collection.create_index(field, **options)
+        except Exception:
+            # Index creation must not hide an otherwise healthy API startup;
+            # MongoDB logs the concrete reason and the next deploy can retry.
+            logger.exception("Could not create MongoDB index %s on %s", options.get("name"), collection.name)
+
+
 async def close_mongo_connection():
     logger.info("Closing MongoDB connection...")
     if db_instance.client:
         db_instance.client.close()
         logger.info("MongoDB connection closed.")
     db_instance.client = None
+    db_instance.db = None
+    db_instance.using_local_fallback = False
 
 
 def get_database():

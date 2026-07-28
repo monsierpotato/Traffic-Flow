@@ -504,6 +504,7 @@ def run(args: argparse.Namespace) -> dict:
             f"{base}/live/sessions",
             {
                 "source_url": source_info.get("source_url") or source_info.get("resolved_url") or args.source_url,
+                "source_id": source_info.get("source_id"),
                 "lane_config": config,
                 "frame_skip": args.frame_skip,
             },

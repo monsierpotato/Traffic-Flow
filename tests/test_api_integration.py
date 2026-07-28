@@ -46,13 +46,8 @@ class TestConfig:
         s = Settings(_env_file=None)
         # With env vars set, MONGODB_DB_NAME will be overridden to "trafficflow_test"
         assert s.MAX_FILE_SIZE_MB in (50, 1024, 2048)
-        assert s.AI_FRAME_SKIP in (1, 1)
-        assert s.AI_RESIZE_DIM in (640, 640)
-        assert s.AI_ENABLE_STABILIZATION is False
-        assert s.TRACK_MATCH_THRESHOLD in (0.3, 0.3)
-        assert s.TRACK_BUFFER in (8, 8)
         assert s.AI_FRAME_SKIP == 1
-        assert s.AI_RESIZE_DIM == 640
+        assert s.AI_RESIZE_DIM in (640, 640)
         assert s.AI_ENABLE_STABILIZATION is False
         assert s.TRACK_MATCH_THRESHOLD == 0.3
         assert s.TRACK_BUFFER == 8
