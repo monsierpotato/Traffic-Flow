@@ -16,8 +16,18 @@ const STEPS = [
   { id: "analytics", label: "Run", icon: "analytics", help: "Start processing and inspect output." },
 ];
 
+const VIEWS = [
+  { id: "dashboard", label: "Dashboard", icon: "dashboard", help: "Review the current runtime and choose the next workspace." },
+  { id: "sources", label: "Sources", icon: "videocam", help: "Upload a recording or resolve a live stream." },
+  { id: "geometry", label: "Geometry", icon: "schema", help: "Define the ROI, lane zones, counting lines, and directions." },
+  { id: "runs", label: "Batch Runs", icon: "analytics", help: "Track a submitted recording and inspect its result." },
+  { id: "live", label: "Live Monitor", icon: "broadcast", help: "Start and monitor one live inference session." },
+  { id: "logs", label: "System Logs", icon: "terminal", help: "Review runtime events and failures." },
+];
+
 const CLASS_ALLOWED = ["car", "bus", "truck", "motorcycle"];
 const LANE_COLORS = ["#9fc9a2", "#dfa88f", "#8fb8df", "#d7bd72", "#b89fdb", "#78c8be"];
+const ACTIVE_TASK_STORAGE_KEY = "trafficflow.active-task";
 const ACCEPTED_VIDEO_MIME_TYPES = [
   "video/mp4",
   "video/x-msvideo",
@@ -39,6 +49,7 @@ const emptyResult = {
 
 function App() {
   const [stepIndex, setStepIndex] = useState(0);
+  const [activeView, setActiveView] = useState("dashboard");
   const [taskId, setTaskId] = useState("");
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
@@ -68,6 +79,7 @@ function App() {
   const resetWorkflow = useCallback(() => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setStepIndex(0);
+    setActiveView("sources");
     setTaskId("");
     setVideoFile(null);
     setVideoUrl("");
@@ -82,12 +94,86 @@ function App() {
     setSubmittedConfig(null);
     setJsonOpen(false);
     setOperatorAlert(null);
+    window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     setLogs(["> initialize_pipeline()", "> waiting for input stream..."]);
   }, [videoUrl]);
 
   const goTo = useCallback((nextIndex) => {
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, nextIndex)));
   }, []);
+
+  const navigateToStep = useCallback((nextIndex) => {
+    goTo(nextIndex);
+    setActiveView(nextIndex === 0 ? "sources" : nextIndex === 3 ? "runs" : "geometry");
+  }, [goTo]);
+
+  const navigateToView = useCallback((viewId) => {
+    setActiveView(viewId);
+    if (viewId === "sources") goTo(0);
+    if (viewId === "geometry") goTo(crop ? 2 : 1);
+    if (viewId === "runs" || viewId === "live") goTo(3);
+  }, [crop, goTo]);
+
+  useEffect(() => {
+    let saved;
+    try {
+      saved = JSON.parse(window.localStorage.getItem(ACTIVE_TASK_STORAGE_KEY) || "null");
+    } catch {
+      saved = null;
+    }
+    if (!saved?.taskId || saved.sourceMode !== "video") return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await pollTask(saved.taskId);
+        if (cancelled) return;
+        setTaskId(saved.taskId);
+        setTaskStatus(status);
+        if (["completed", "succeeded"].includes(status.status)) {
+          const nextResult = await fetchResult(saved.taskId);
+          if (!cancelled) {
+            setResult(nextResult);
+            setActiveView("runs");
+            goTo(3);
+          }
+          return;
+        }
+        const previewAsset = await fetchPreview(saved.taskId);
+        if (!cancelled) {
+          setPreview(previewAsset);
+          setActiveView("geometry");
+          goTo(1);
+        }
+      } catch (error) {
+        window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
+        appendLog(`draft restore skipped: ${error.message}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [appendLog, goTo]);
+
+  useEffect(() => {
+    if (sourceMode !== "video" || !taskId || !roi || !crop || !lanes.length) return undefined;
+    const timer = window.setTimeout(async () => {
+      const config = buildLaneConfig({
+        preview,
+        roi,
+        crop,
+        lanes,
+        settings,
+        videoFile,
+        includeDraft: true,
+      });
+      try {
+        await saveLaneConfig(taskId, config);
+        appendLog("draft geometry auto-saved");
+      } catch (error) {
+        appendLog(`draft auto-save failed: ${error.message}`);
+      }
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [appendLog, crop, lanes, preview, roi, settings, sourceMode, taskId, videoFile]);
 
   async function handleUpload(file) {
     if (!file) return;
@@ -109,12 +195,14 @@ function App() {
       setOperatorAlert(null);
       const response = await uploadVideo(file);
       setTaskId(response.task_id);
+      window.localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({ taskId: response.task_id, sourceMode: "video" }));
       setTaskStatus({ status: response.status, progress: 0 });
       appendLog(`task created: ${response.task_id}`);
 
       const previewAsset = await fetchPreview(response.task_id);
       setPreview(previewAsset);
       appendLog(`preview ready: ${previewAsset.width}x${previewAsset.height}`);
+      setActiveView("geometry");
       goTo(1);
     } catch (error) {
       const message = error.message || "Upload failed";
@@ -145,6 +233,7 @@ function App() {
       setCrop(null);
       setLanes([createLane(1)]);
       appendLog(`live preview ready: ${previewAsset.width}x${previewAsset.height} (${source.source_type})`);
+      setActiveView("geometry");
       goTo(1);
     } catch (error) {
       const message = error.message || "Live source could not be resolved";
@@ -159,6 +248,7 @@ function App() {
     setRoi(nextRoi);
     setCrop(cropAsset);
     appendLog(`roi crop confirmed: ${Math.round(nextRoi.cropRect.width)}x${Math.round(nextRoi.cropRect.height)}`);
+    setActiveView("geometry");
     goTo(2);
   }
 
@@ -173,6 +263,7 @@ function App() {
     });
     setSubmittedConfig(config);
     setOperatorAlert(null);
+    window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     appendLog(`${sourceMode === "live" ? "validating live" : "submitting"} ${config.lanes.length} lane configs`);
 
     if (sourceMode === "live") {
@@ -186,6 +277,7 @@ function App() {
       }
       setLanes(laneDrafts);
       setTaskStatus({ status: "configured", progress: 0, stage: "ready_for_live", stage_detail: "Geometry validated" });
+      setActiveView("live");
       goTo(3);
       return;
     }
@@ -196,6 +288,7 @@ function App() {
       const response = await submitTask(taskId, config);
       setTaskStatus({ status: response.status || "queued", progress: response.progress || 0, startedAt: Date.now() });
       setLanes(laneDrafts);
+      setActiveView("runs");
       goTo(3);
     } catch (error) {
       const message = error.message || "Task submission failed";
@@ -207,35 +300,36 @@ function App() {
 
   return (
     <div className="app-shell">
-      <TopBar stepIndex={stepIndex} setStepIndex={goTo} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} />
+      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} />
       <main className="app-main">
         <SideNav
           taskStatus={taskStatus}
           result={result}
-          stepIndex={stepIndex}
-          goTo={goTo}
-          canOpenDashboard={Boolean(submittedConfig)}
-          canOpenLaneConfig={Boolean(crop)}
+          activeView={activeView}
+          onNavigate={navigateToView}
         />
         <section className="workspace">
-          <WizardNav stepIndex={stepIndex} />
+          {!['dashboard', 'logs'].includes(activeView) && <WizardNav stepIndex={stepIndex} />}
           {operatorAlert && <OperatorAlert alert={operatorAlert} onDismiss={() => setOperatorAlert(null)} />}
-          {stepIndex === 0 && <UploadStep onUpload={handleUpload} onLiveResolve={handleLiveResolve} logs={logs} />}
-          {stepIndex === 1 && preview && <RoiMaskingStep preview={preview} onBack={() => goTo(0)} onConfirm={handleRoiConfirm} />}
-          {stepIndex === 2 && crop && (
+          {activeView === "dashboard" && <DashboardHome taskId={taskId} taskStatus={taskStatus} result={result} sourceMode={sourceMode} onNavigate={navigateToView} />}
+          {activeView === "sources" && <UploadStep onUpload={handleUpload} onLiveResolve={handleLiveResolve} />}
+          {activeView === "geometry" && stepIndex === 1 && preview && <RoiMaskingStep preview={preview} onBack={() => navigateToStep(0)} onConfirm={handleRoiConfirm} />}
+          {activeView === "geometry" && stepIndex === 2 && crop && (
             <LaneEditorStep
               crop={crop}
               lanes={lanes}
               setLanes={setLanes}
               settings={settings}
               setSettings={setSettings}
-              onBack={() => goTo(1)}
+              onBack={() => navigateToStep(1)}
               onSubmit={handleSubmit}
               sourceMode={sourceMode}
             />
           )}
-          {stepIndex === 3 && (
+          {activeView === "geometry" && !preview && <EmptyState eyebrow="Geometry workspace" title="A source is needed before geometry can be defined." message="Open Sources to upload a recording or resolve a live stream. The first frame will become your annotation surface." actionLabel="Open Sources" onAction={() => navigateToView("sources")} />}
+          {activeView === "runs" && submittedConfig && sourceMode === "video" && (
             <AnalyticsDashboard
+              view="batch"
               taskId={taskId}
               videoUrl={videoUrl}
               taskStatus={taskStatus}
@@ -249,6 +343,25 @@ function App() {
               appendLog={appendLog}
             />
           )}
+          {activeView === "runs" && (!submittedConfig || sourceMode !== "video") && <EmptyState eyebrow="Batch runs" title="No batch run is ready to inspect." message="Batch Runs is only for uploaded recordings. Complete Geometry for a recording, then submit it here." actionLabel="Open Sources" onAction={() => navigateToView("sources")} />}
+          {activeView === "live" && sourceMode === "live" && submittedConfig && (
+            <AnalyticsDashboard
+              view="live"
+              taskId={taskId}
+              videoUrl={videoUrl}
+              taskStatus={taskStatus}
+              setTaskStatus={setTaskStatus}
+              result={result}
+              setResult={setResult}
+              submittedConfig={submittedConfig}
+              sourceMode={sourceMode}
+              liveSource={liveSource}
+              onJson={() => setJsonOpen(true)}
+              appendLog={appendLog}
+            />
+          )}
+          {activeView === "live" && (sourceMode !== "live" || !submittedConfig) && <EmptyState eyebrow="Live monitor" title="Live monitoring is not configured yet." message="Resolve a live source, define its geometry, and validate the configuration before starting a session." actionLabel={sourceMode === "live" ? "Open Geometry" : "Open Sources"} onAction={() => navigateToView(sourceMode === "live" ? "geometry" : "sources")} />}
+          {activeView === "logs" && <SystemLogsPage logs={logs} taskId={taskId} taskStatus={taskStatus} result={result} />}
         </section>
       </main>
       {jsonOpen && <JsonModal title="Submitted lane_config.json" data={submittedConfig || result || emptyResult} onClose={() => setJsonOpen(false)} />}
@@ -256,7 +369,7 @@ function App() {
   );
 }
 
-function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
+function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
@@ -266,19 +379,19 @@ function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
           <span className="brand-subtitle">Vision operations console</span>
         </div>
       </div>
-      <nav className="top-steps" aria-label="Workflow">
+      {!['dashboard', 'logs'].includes(activeView) && <nav className="top-steps" aria-label="Workflow">
         {STEPS.map((step, index) => (
           <button
             key={step.id}
             className={index === stepIndex ? "active" : ""}
             disabled={index > stepIndex}
             title={step.help}
-            onClick={() => index <= stepIndex && setStepIndex(index)}
+            onClick={() => index <= stepIndex && onStepSelect(index)}
           >
             {step.label}
           </button>
         ))}
-      </nav>
+      </nav>}
       <div className="top-actions">
         <span className="deploy-pill" title="The local API is responding"><span className="live-indicator" /> System online</span>
         <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
@@ -289,17 +402,109 @@ function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
   );
 }
 
-function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpenLaneConfig }) {
-  const openLogs = () => {
-    const logPanel = document.getElementById("system-logs");
-    if (logPanel) {
-      logPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    goTo(0);
-    window.setTimeout(() => document.getElementById("system-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-  };
+function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
+  const currentState = taskStatus.status || "draft";
+  const modules = [
+    { id: "sources", icon: "videocam", eyebrow: "01 / Inputs", title: "Sources", text: "Upload a recording or resolve a live stream and create a reference frame." },
+    { id: "geometry", icon: "schema", eyebrow: "02 / Annotation", title: "Geometry", text: "Define the ROI, lane zones, counting lines, and direction vectors." },
+    { id: "runs", icon: "analytics", eyebrow: "03 / Batch", title: "Batch Runs", text: "Track one submitted recording and inspect its output and lane counts." },
+    { id: "live", icon: "broadcast", eyebrow: "04 / Realtime", title: "Live Monitor", text: "Start one live inference session and monitor its stream health." },
+    { id: "logs", icon: "terminal", eyebrow: "05 / Diagnostics", title: "System Logs", text: "Review runtime events and failures in a dedicated diagnostic view." },
+  ];
 
+  return (
+    <div className="subweb-page dashboard-home">
+      <div className="page-intro subweb-intro">
+        <div>
+          <p className="eyebrow">00 / Operations overview</p>
+          <h2>Know what is happening before you start processing.</h2>
+          <p className="lede">Each workspace has one job: connect a source, define geometry, run inference, monitor a live session, or inspect diagnostics.</p>
+        </div>
+        <div className="intro-status">
+          <span className="status-dot" />
+          <div><strong>{currentState.replaceAll("_", " ")}</strong><small>{sourceMode === "live" ? "Live source selected" : "Recorded source mode"}</small></div>
+        </div>
+      </div>
+      <div className="overview-grid" aria-label="Runtime overview">
+        <Metric label="Runtime state" value={currentState.replaceAll("_", " ")} small />
+        <Metric label="Active source" value={sourceMode === "live" ? "Live stream" : taskId ? "Recording" : "None"} small />
+        <Metric label="Vehicles counted" value={result?.total_count ?? "--"} small />
+        <Metric label="Progress" value={`${taskStatus.progress ?? 0}%`} small />
+      </div>
+      {taskId && (
+        <section className="current-work panel-card" aria-labelledby="current-work-title">
+          <div>
+            <p className="eyebrow">Current work</p>
+            <h3 id="current-work-title">{sourceMode === "live" ? "Live source configuration" : "Batch task in the pipeline"}</h3>
+            <p className="hint-text">Task or source ID: <code>{taskId}</code></p>
+          </div>
+          <button className="secondary-button" onClick={() => onNavigate(sourceMode === "live" ? "live" : "runs")}>Open current workspace <Icon name="arrow_right" /></button>
+        </section>
+      )}
+      <div className="module-grid">
+        {modules.map((module) => (
+          <section className="module-card" key={module.id}>
+            <div className="module-card-icon"><Icon name={module.icon} /></div>
+            <p className="eyebrow">{module.eyebrow}</p>
+            <h3>{module.title}</h3>
+            <p>{module.text}</p>
+            <button className="text-button" onClick={() => onNavigate(module.id)}>Open {module.title} <Icon name="arrow_right" /></button>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ eyebrow, title, message, actionLabel, onAction }) {
+  return (
+    <section className="empty-state" aria-live="polite">
+      <span className="empty-state-icon"><Icon name="info" /></span>
+      <p className="eyebrow">{eyebrow}</p>
+      <h2>{title}</h2>
+      <p>{message}</p>
+      <button className="primary-button" onClick={onAction}><Icon name="arrow_right" /> {actionLabel}</button>
+    </section>
+  );
+}
+
+function SystemLogsPage({ logs, taskId, taskStatus, result }) {
+  const lines = [
+    ...logs,
+    `> status=${taskStatus.status || "draft"}`,
+    `> stage=${taskStatus.stage || "--"}`,
+    `> task_id=${taskId || "--"}`,
+    `> total_count=${result?.total_count ?? "--"}`,
+  ];
+
+  return (
+    <div className="subweb-page logs-page">
+      <div className="page-intro subweb-intro">
+        <div>
+          <p className="eyebrow">05 / Diagnostics</p>
+          <h2>System logs stay separate from analysis.</h2>
+          <p className="lede">Use this workspace to trace source resolution, geometry saves, task polling, and live session errors without crowding the result views.</p>
+        </div>
+        <span className="meta-pill">{logs.length} recent events</span>
+      </div>
+      <div className="logs-grid">
+        <section className="console-panel" aria-labelledby="logs-title">
+          <div className="panel-header compact"><div><p className="eyebrow">Runtime output</p><h3 id="logs-title">Event stream</h3></div></div>
+          <Terminal lines={lines} />
+        </section>
+        <aside className="tool-panel log-summary">
+          <p className="eyebrow">Snapshot</p>
+          <Metric label="State" value={taskStatus.status || "draft"} />
+          <Metric label="Stage" value={taskStatus.stage || "--"} small />
+          <Metric label="Task" value={taskId || "--"} small />
+          <Metric label="Count" value={result?.total_count ?? "--"} small />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function SideNav({ taskStatus, result, activeView, onNavigate }) {
   return (
     <aside className="side-nav">
       <div className="runtime-card">
@@ -311,10 +516,7 @@ function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpe
       </div>
       <div className="side-caption">Workspace</div>
       <div className="nav-stack">
-        <NavItem icon="dashboard" label="Dashboard" active={stepIndex === 3} disabled={!canOpenDashboard} title="Open analytics dashboard after a config is submitted" onClick={() => goTo(3)} />
-        <NavItem icon="videocam" label="Camera Feed" active={stepIndex === 0 || stepIndex === 1} title="Open source upload/live resolve and camera preview workflow" onClick={() => goTo(0)} />
-        <NavItem icon="schema" label="Lane Config" active={stepIndex === 2} disabled={!canOpenLaneConfig} title="Open lane editor after ROI is confirmed" onClick={() => goTo(2)} />
-        <NavItem icon="terminal" label="System Logs" title="Jump to the visible workflow/runtime logs" onClick={openLogs} />
+        {VIEWS.map((view) => <NavItem key={view.id} icon={view.icon} label={view.label} active={activeView === view.id} title={view.help} onClick={() => onNavigate(view.id)} />)}
       </div>
       <div className="side-stat">
         <span className="eyebrow">Vehicles counted</span>
@@ -325,9 +527,9 @@ function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpe
   );
 }
 
-function NavItem({ icon, label, active = false, disabled = false, title, onClick }) {
+function NavItem({ icon, label, active = false, title, onClick }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`} disabled={disabled} title={title} onClick={onClick}>
+    <button className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={title} onClick={onClick}>
       <Icon name={icon} />
       {label}
     </button>
@@ -370,7 +572,7 @@ function OperatorAlert({ alert, onDismiss }) {
   );
 }
 
-function UploadStep({ onUpload, onLiveResolve, logs }) {
+function UploadStep({ onUpload, onLiveResolve }) {
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sourceType, setSourceType] = useState("file");
@@ -449,7 +651,6 @@ function UploadStep({ onUpload, onLiveResolve, logs }) {
         <span><Icon name="check" /> ROI-aware inference</span>
         <span><Icon name="check" /> Batch and live modes</span>
       </div>
-      <div id="system-logs"><Terminal lines={logs} /></div>
     </div>
   );
 }
@@ -740,7 +941,8 @@ function SettingsPanel({ settings, setSettings }) {
   );
 }
 
-function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
+function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
+  const isLiveView = view === "live";
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
   const [liveSession, setLiveSession] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
@@ -750,17 +952,20 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
     liveSessionRef.current = liveSession;
   }, [liveSession]);
 
-  useEffect(() => () => {
-    const sessionId = liveSessionRef.current?.session_id;
-    if (sessionId) {
-      removeLive(sessionId).catch(() => {
-        // The backend may already have removed a stopped/failed session.
-      });
-    }
-  }, []);
+  useEffect(() => {
+    if (!isLiveView) return undefined;
+    return () => {
+      const sessionId = liveSessionRef.current?.session_id;
+      if (sessionId) {
+        removeLive(sessionId).catch(() => {
+          // The backend may already have removed a stopped/failed session.
+        });
+      }
+    };
+  }, [isLiveView]);
 
   useEffect(() => {
-    if (sourceMode === "live") return undefined;
+    if (isLiveView || !taskId) return undefined;
     let cancelled = false;
     const interval = window.setInterval(async () => {
       try {
@@ -789,16 +994,16 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, setResult, setTaskStatus, taskId, sourceMode]);
+  }, [appendLog, isLiveView, setResult, setTaskStatus, taskId]);
 
   useEffect(() => {
-    if (liveSource?.resolved_url || liveSource?.source_url) {
+    if (isLiveView && (liveSource?.resolved_url || liveSource?.source_url)) {
       setLiveUrl(liveSource.resolved_url || liveSource.source_url);
     }
-  }, [liveSource]);
+  }, [isLiveView, liveSource]);
 
   useEffect(() => {
-    if (!liveSession?.session_id) return;
+    if (!isLiveView || !liveSession?.session_id) return undefined;
     let cancelled = false;
     const interval = window.setInterval(async () => {
       try {
@@ -816,7 +1021,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, liveSession?.session_id]);
+  }, [appendLog, isLiveView, liveSession?.session_id]);
 
   async function startLiveSession() {
     if (!liveUrl.trim() || !submittedConfig) return;
@@ -859,7 +1064,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
   const visibleResult = result || emptyResult;
   const progress = taskStatus.progress ?? 0;
   const laneRows = Object.entries(visibleResult.counts || {});
-  const liveReady = sourceMode === "live" && Boolean(submittedConfig);
+  const liveReady = isLiveView && sourceMode === "live" && Boolean(submittedConfig);
   const liveStatusLabel = liveSession?.status || (liveReady ? "ready_to_start" : "configure_geometry");
   const liveStatusHint = liveSession?.session_id
     ? `Session ${liveSession.session_id.slice(0, 8)} · ${liveSession.frames_processed || 0} processed / ${liveSession.frames_read || 0} read`
@@ -902,6 +1107,16 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
     ["imgsz", liveSession?.ai_imgsz || "--"],
     ["last_error", liveSession?.last_error || taskStatus.stage_detail || "--"],
   ];
+  const debugRows = isLiveView ? liveDebugRows : [
+    ["mode", "batch"],
+    ["task", taskId || "--"],
+    ["status", taskStatus.status || "idle"],
+    ["stage", taskStatus.stage || "--"],
+    ["progress", `${progress}%`],
+    ["lanes", submittedConfig?.lanes?.length ?? 0],
+    ["result", result ? "available" : "pending"],
+    ["error", taskStatus.stage_detail || "--"],
+  ];
   const canStartLive = liveChecklistReady && !liveBusy;
   const liveStartTitle = !submittedConfig
     ? "Validate ROI/lane/counting geometry before starting live inference"
@@ -916,13 +1131,13 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       <section className="media-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">04 / Analysis run</p>
-            <h2>Read the traffic story.</h2>
-            <p className="panel-subtitle">Monitor processing health and inspect the annotated output as it becomes available.</p>
+            <p className="eyebrow">{isLiveView ? "04 / Live monitor" : "03 / Batch run"}</p>
+            <h2>{isLiveView ? "Watch the live stream." : "Read the traffic story."}</h2>
+            <p className="panel-subtitle">{isLiveView ? "Start one realtime session and monitor its stream health and lane volume." : "Track processing health and inspect the annotated output as it becomes available."}</p>
           </div>
-          <span className={`meta-pill status-${sourceMode === "live" ? liveStatusLabel : (taskStatus.status || "queued")}`}>{sourceMode === "live" ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")}</span>
+          <span className={`meta-pill status-${isLiveView ? liveStatusLabel : (taskStatus.status || "queued")}`}>{isLiveView ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")}</span>
         </div>
-        {sourceMode === "live" ? (
+        {isLiveView ? (
           liveFrameUrl ? (
             <img className="video-player live-output" src={liveFrameUrl} alt="Live annotated inference output" />
           ) : (
@@ -936,9 +1151,9 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
           <div style={{ width: `${progress}%` }} />
         </div>
         <div className="output-summary">
-          <Metric label="Output Mode" value={sourceMode === "live" ? "Live stream" : "Batch video"} small />
-          <Metric label="Runtime State" value={sourceMode === "live" ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")} small />
-          <Metric label="Frame Health" value={sourceMode === "live" && liveSession ? `${liveSession.frames_processed}/${liveSession.frames_read}` : `${visibleResult.frames}/${visibleResult.total_frames}`} small />
+          <Metric label="Output Mode" value={isLiveView ? "Live stream" : "Batch video"} small />
+          <Metric label="Runtime State" value={isLiveView ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")} small />
+          <Metric label="Frame Health" value={isLiveView && liveSession ? `${liveSession.frames_processed}/${liveSession.frames_read}` : `${visibleResult.frames}/${visibleResult.total_frames}`} small />
         </div>
       </section>
       <aside className="metrics-panel">
@@ -949,7 +1164,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
         <Metric label="Total Count" value={visibleResult.total_count} />
         <button className="secondary-button full" onClick={onJson}><Icon name="code" /> Inspect payload</button>
       </aside>
-      <section className="live-panel">
+      {isLiveView && <section className="live-panel">
         <div className="panel-header compact">
           <div>
             <p className="eyebrow">Realtime source</p>
@@ -996,7 +1211,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
           <Metric label="Img Size" value={liveSession?.ai_imgsz ?? "--"} small />
         </div>
         {liveSession?.last_error && <p className="error-text">{liveSession.last_error}</p>}
-      </section>
+      </section>}
       <section className="chart-panel">
         <div className="panel-header compact">
           <div>
@@ -1016,27 +1231,13 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
           </div>
         </div>
         <div className="debug-grid">
-          {liveDebugRows.map(([label, value]) => (
+          {debugRows.map(([label, value]) => (
             <div className="debug-row" key={label}>
               <span>{label}</span>
               <strong>{value}</strong>
             </div>
           ))}
         </div>
-      </section>
-      <section className="console-panel" id="system-logs">
-        <Terminal
-          lines={[
-            `> [status: ${taskStatus.status || "queued"}]`,
-            `> source_mode=${sourceMode || "video"}`,
-            `> stage=${taskStatus.stage || "--"}`,
-            `> detail=${taskStatus.stage_detail || "--"}`,
-            `> task_id=${taskId || "--"}`,
-            `> lanes=${submittedConfig?.lanes?.length ?? 0}`,
-            `> progress=${progress}`,
-            `> live=${liveSession?.status || "idle"} fps=${liveSession?.fps ?? "--"}`,
-          ]}
-        />
       </section>
     </div>
   );
@@ -1178,6 +1379,13 @@ async function submitTask(taskId, config) {
   }));
 }
 
+async function saveLaneConfig(videoId, config) {
+  return apiRequest("/api/v1/lanes/config", {
+    method: "POST",
+    body: JSON.stringify({ ...config, video_id: videoId }),
+  });
+}
+
 async function pollTask(taskId) {
   return normalizeTaskStatus(await apiRequest(`/tasks/${taskId}`));
 }
@@ -1217,9 +1425,9 @@ function createLane(index) {
   };
 }
 
-function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile }) {
+function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile, includeDraft = false }) {
   const validLanes = lanes
-    .filter((lane) => lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2)
+    .filter((lane) => includeDraft || (lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2))
     .map((lane) => ({
       lane_id: lane.lane_id.trim() || "lane",
       valid_zone: lane.valid_zone.map((point) => toSourcePoint(point, roi.cropRect)),
