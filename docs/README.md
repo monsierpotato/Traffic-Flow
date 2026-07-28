@@ -1,36 +1,32 @@
-# TrafficFlow documentation
+# Documentation
 
-Tài liệu được chia thành ba nhóm: tài liệu vận hành hiện tại, hợp đồng tích
-hợp, và báo cáo lịch sử/benchmark. Luồng được hỗ trợ hiện tại là `src/` + React
-Vite + FastAPI + Celery/Redis + local YOLO/ByteTrack.
+Documentation is organized into three groups: current operations, integration contracts, and historical/benchmark reports. The currently supported path is `src/` plus the React frontend.
 
-## Bắt đầu từ đây
+## Start Here
 
-| Tài liệu | Dùng khi |
+| Document | Use it when |
 |---|---|
-| [current/architecture.md](current/architecture.md) | Hiểu module và data flow hiện tại |
-| [current/operations.md](current/operations.md) | Chạy local, readiness và blocker |
-| [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) | Chạy native local bằng Node.js + Python |
-| [HUONG_DAN_SU_DUNG.md](HUONG_DAN_SU_DUNG.md) | Tài liệu sử dụng/lịch sử triển khai |
-| [API_INTEGRATION.md](API_INTEGRATION.md) | Tra endpoint, trạng thái task và callback |
-| [contracts/](contracts/) | Schema lane config, callback và kết quả |
+| [current/architecture.md](current/architecture.md) | Understanding the current modules and data flow |
+| [current/operations.md](current/operations.md) | Running locally, checking readiness, and resolving blockers |
+| [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) | Running the native Node.js + Python stack |
+| [USER_GUIDE.md](USER_GUIDE.md) | Following the detailed usage and operations guide |
+| [VERCEL_FRONTEND_DEPLOYMENT.md](VERCEL_FRONTEND_DEPLOYMENT.md) | Deploying only the React frontend to Vercel |
+| [API_INTEGRATION.md](API_INTEGRATION.md) | Reviewing endpoints, task states, and callbacks |
+| [contracts/](contracts/) | Reviewing lane configuration, callbacks, and result schemas |
 
-## Bố cục repository
+## Repository Layout
 
 ```text
-src/api/       FastAPI app, routes, schemas, services
-src/shared/    settings, Mongo/local JSON fallback, R2 client
-src/worker/    Celery task và video pipeline
-src/tfengine/  YOLO + ByteTrack + counting engine
-frontend/      React/Vite operator UI
-benchmark/     parser, runner, metric và config benchmark
-scripts/        supported preflight, startup and dependency checks
-tools/archive/ script thủ công lịch sử, không chạy trong runtime/CI
+src/api/        FastAPI routes, schemas, and services
+src/worker/     Celery tasks and video pipeline
+src/tfengine/   Shared AI/runtime engine
+frontend/       React + Vite application
+benchmark/      Benchmark parsers, runners, metrics, and configuration
+tools/archive/  Historical manual scripts; not used by runtime or CI
 ```
 
-## Phân loại tài liệu
+## Documentation Classification
 
-- `docs/current/`: nguồn chuẩn cho trạng thái và cách chạy hiện tại.
-- `docs/contracts/`: các boundary không được tự ý đổi khi refactor.
-- Các báo cáo phase/portfolio/raw đã được loại khỏi source tree vì không cần
-  cho runtime project.
+- `docs/current/`: the source of truth for the current state and run procedures.
+- `docs/contracts/`: boundaries that must not be changed casually during refactoring.
+- Phase, portfolio, and raw reports were removed from the source tree because they are not required for the current runtime path.

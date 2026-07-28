@@ -9,6 +9,7 @@
     "install:python": ".venv/bin/python -m pip install -e \".[api,worker,benchmark,dev,gpu]\"",
     "install:gpu": ".venv/bin/python -m pip install -e \".[gpu]\"",
     "install:frontend": "npm --prefix frontend ci",
+    "build:frontend": "npm --prefix frontend run build",
     "build": "npm run install:frontend && npm --prefix frontend run build",
     "dev": "npm run preflight && node scripts/local-stack.mjs",
     "dev:frontend": "npm --prefix frontend run dev -- --host 127.0.0.1",

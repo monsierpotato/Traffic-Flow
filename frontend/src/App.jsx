@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiBlob, apiRequest } from "./api/client";
+import {
+  apiBlob,
+  apiRequest,
+  apiUrl,
+  normalizeAnalyticsResult,
+  normalizeLiveSession,
+  normalizeSource,
+  normalizeTaskStatus,
+} from "./api/client";
 
 const STEPS = [
   { id: "upload", label: "Source", icon: "upload_file", help: "Upload a file or resolve a live stream." },
@@ -10,6 +18,15 @@ const STEPS = [
 
 const CLASS_ALLOWED = ["car", "bus", "truck", "motorcycle"];
 const LANE_COLORS = ["#9fc9a2", "#dfa88f", "#8fb8df", "#d7bd72", "#b89fdb", "#78c8be"];
+const ACCEPTED_VIDEO_MIME_TYPES = [
+  "video/mp4",
+  "video/x-msvideo",
+  "video/avi",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/webm",
+];
+const ACCEPTED_VIDEO_EXTENSIONS = /\.(mp4|avi|mov|mkv|webm)$/i;
 
 const emptyResult = {
   status: "idle",
@@ -74,9 +91,9 @@ function App() {
 
   async function handleUpload(file) {
     if (!file) return;
-    const isValid = ["video/mp4", "video/x-msvideo", "video/avi"].includes(file.type) || /\.(mp4|avi)$/i.test(file.name);
+    const isValid = ACCEPTED_VIDEO_MIME_TYPES.includes(file.type) || ACCEPTED_VIDEO_EXTENSIONS.test(file.name);
     if (!isValid) {
-      appendLog("invalid file type; expected MP4 or AVI");
+      appendLog("invalid file type; expected MP4, AVI, MOV, MKV, or WEBM");
       return;
     }
 
@@ -116,7 +133,7 @@ function App() {
       if (source.error) {
         throw new Error(source.error);
       }
-      const previewAsset = await loadImage(source.preview_url);
+      const previewAsset = await loadImage(apiUrl(source.preview_url));
       setSourceMode("live");
       setLiveSource(source);
       setTaskId(source.source_id);
@@ -243,8 +260,11 @@ function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
-        <div className="brand-mark">TF</div>
-        <h1>TrafficFlow Engine</h1>
+        <div className="brand-mark" aria-hidden="true"><Icon name="traffic" /></div>
+        <div>
+          <h1>TrafficFlow</h1>
+          <span className="brand-subtitle">Vision operations console</span>
+        </div>
       </div>
       <nav className="top-steps" aria-label="Workflow">
         {STEPS.map((step, index) => (
@@ -260,9 +280,9 @@ function TopBar({ stepIndex, setStepIndex, onReset, hasWork }) {
         ))}
       </nav>
       <div className="top-actions">
-        <span className="deploy-pill" title="Deployment readiness profile">Deploy-ready UI</span>
+        <span className="deploy-pill" title="The local API is responding"><span className="live-indicator" /> System online</span>
         <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
-          <span className="material-symbols-outlined">restart_alt</span>
+          <Icon name="restart" />
         </button>
       </div>
     </header>
@@ -285,10 +305,11 @@ function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpe
       <div className="runtime-card">
         <span className="status-dot" />
         <div>
-          <h2>Core Runtime</h2>
-          <p>{taskStatus.status || "idle"}</p>
+          <h2>Core runtime</h2>
+          <p aria-live="polite">{taskStatus.status || "idle"}</p>
         </div>
       </div>
+      <div className="side-caption">Workspace</div>
       <div className="nav-stack">
         <NavItem icon="dashboard" label="Dashboard" active={stepIndex === 3} disabled={!canOpenDashboard} title="Open analytics dashboard after a config is submitted" onClick={() => goTo(3)} />
         <NavItem icon="videocam" label="Camera Feed" active={stepIndex === 0 || stepIndex === 1} title="Open source upload/live resolve and camera preview workflow" onClick={() => goTo(0)} />
@@ -296,8 +317,9 @@ function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpe
         <NavItem icon="terminal" label="System Logs" title="Jump to the visible workflow/runtime logs" onClick={openLogs} />
       </div>
       <div className="side-stat">
-        <span className="eyebrow">Total Count</span>
+        <span className="eyebrow">Vehicles counted</span>
         <strong>{result?.total_count ?? "--"}</strong>
+        <small>Across configured lanes</small>
       </div>
     </aside>
   );
@@ -306,7 +328,7 @@ function SideNav({ taskStatus, result, stepIndex, goTo, canOpenDashboard, canOpe
 function NavItem({ icon, label, active = false, disabled = false, title, onClick }) {
   return (
     <button className={`nav-item ${active ? "active" : ""}`} disabled={disabled} title={title} onClick={onClick}>
-      <span className="material-symbols-outlined">{icon}</span>
+      <Icon name={icon} />
       {label}
     </button>
   );
@@ -314,32 +336,35 @@ function NavItem({ icon, label, active = false, disabled = false, title, onClick
 
 function WizardNav({ stepIndex }) {
   return (
-    <div className="wizard">
-      {STEPS.map((step, index) => (
-        <div key={step.id} className={`wizard-step ${index === stepIndex ? "active" : ""} ${index < stepIndex ? "done" : ""}`}>
-          <span className="material-symbols-outlined">{step.icon}</span>
-          <div>
-            <small>Step {index + 1}</small>
-            <strong>{step.label}</strong>
-            <em>{step.help}</em>
-          </div>
-        </div>
-      ))}
-    </div>
+    <ol className="wizard" aria-label="Analysis workflow">
+      {STEPS.map((step, index) => {
+        const state = index === stepIndex ? "active" : index < stepIndex ? "done" : "upcoming";
+        return (
+          <li key={step.id} className={`wizard-step ${state}`}>
+            <span className="wizard-index">{index < stepIndex ? <Icon name="check" /> : `0${index + 1}`}</span>
+            <div>
+              <small>Step {index + 1}</small>
+              <strong>{step.label}</strong>
+              <em>{step.help}</em>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
 function OperatorAlert({ alert, onDismiss }) {
   return (
-    <div className={`operator-alert ${alert.tone || "info"}`}>
-      <span className="material-symbols-outlined">{alert.tone === "error" ? "error" : "info"}</span>
+    <div className={`operator-alert ${alert.tone || "info"}`} role="alert">
+      <Icon name={alert.tone === "error" ? "error" : "info"} />
       <div>
         <strong>{alert.title}</strong>
         <p>{alert.message}</p>
         {alert.action && <small>{alert.action}</small>}
       </div>
       <button className="icon-button" onClick={onDismiss} aria-label="Dismiss alert">
-        <span className="material-symbols-outlined">close</span>
+        <Icon name="close" />
       </button>
     </div>
   );
@@ -348,6 +373,7 @@ function OperatorAlert({ alert, onDismiss }) {
 function UploadStep({ onUpload, onLiveResolve, logs }) {
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [sourceType, setSourceType] = useState("file");
   const [liveUrl, setLiveUrl] = useState("");
   const inputRef = useRef(null);
 
@@ -357,7 +383,8 @@ function UploadStep({ onUpload, onLiveResolve, logs }) {
     setBusy(false);
   }
 
-  async function resolveUrl() {
+  async function resolveUrl(event) {
+    event?.preventDefault();
     if (!liveUrl.trim()) return;
     setBusy(true);
     await onLiveResolve(liveUrl);
@@ -366,54 +393,61 @@ function UploadStep({ onUpload, onLiveResolve, logs }) {
 
   return (
     <div className="step-layout single">
-      <div>
-        <p className="eyebrow">Sprint 1 frontend</p>
-        <h2>Video Source</h2>
-        <p className="lede">Initialize the TrafficFlow pipeline by selecting a video file or resolving a live stream snapshot for annotation.</p>
+      <div className="page-intro">
+        <div>
+          <p className="eyebrow">01 / Source intake</p>
+          <h2>Bring a traffic source into focus.</h2>
+          <p className="lede">Upload a recorded feed or resolve a live stream. TrafficFlow creates a reference frame so your team can define the analysis geometry before compute starts.</p>
+        </div>
+        <div className="intro-status">
+          <span className="status-dot" />
+          <div><strong>Pipeline ready</strong><small>Waiting for source</small></div>
+        </div>
       </div>
-      <div className="live-panel">
-        <div className="panel-header compact">
+      <section className="source-card" aria-labelledby="source-card-title">
+        <div className="source-card-head">
           <div>
-            <p className="eyebrow">Realtime source setup</p>
-            <h3>Resolve stream before annotation</h3>
+            <p className="eyebrow">Source connection</p>
+            <h3 id="source-card-title">Choose how to start</h3>
           </div>
-          <span className="meta-pill">YouTube · HLS · RTSP · MJPEG</span>
+          <span className="meta-pill">Max 2 GB · MP4 / MOV / MKV</span>
         </div>
-        <div className="live-controls">
-          <input
-            value={liveUrl}
-            onChange={(event) => setLiveUrl(event.target.value)}
-            placeholder="Paste YouTube/HLS/RTSP/MJPEG/direct video URL"
-          />
-          <button className="primary-button" disabled={busy || !liveUrl.trim()} onClick={resolveUrl}>Resolve Source</button>
+        <div className="source-tabs" role="tablist" aria-label="Source type">
+          <button className={sourceType === "file" ? "active" : ""} role="tab" aria-selected={sourceType === "file"} onClick={() => setSourceType("file")}>
+            <Icon name="upload_file" /><span>Recorded video</span><small>Best for batch analysis</small>
+          </button>
+          <button className={sourceType === "live" ? "active" : ""} role="tab" aria-selected={sourceType === "live"} onClick={() => setSourceType("live")}>
+            <Icon name="broadcast" /><span>Live stream</span><small>HLS · RTSP · MJPEG</small>
+          </button>
         </div>
-        <p className="hint-text">The app captures a preview frame first. Draw ROI/lanes/counting line/vector before starting live inference.</p>
-      </div>
-      <div
-        className={`upload-band ${dragging ? "dragging" : ""}`}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          acceptFile(event.dataTransfer.files?.[0]);
-        }}
-        onClick={() => inputRef.current?.click()}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="video/mp4,video/x-msvideo,.avi"
-          onChange={(event) => acceptFile(event.target.files?.[0])}
-          hidden
-        />
-        <span className={`material-symbols-outlined upload-icon ${busy ? "spin" : ""}`}>{busy ? "progress_activity" : "upload_file"}</span>
-        <h3>{busy ? "Extracting reference frame..." : "Drag and drop video feed"}</h3>
-        <p>MP4 or AVI. The backend stores the source and generates the preview before annotation.</p>
-        <button className="secondary-button" type="button">Browse Files</button>
+        {sourceType === "file" ? (
+          <div
+            className={`upload-band ${dragging ? "dragging" : ""}`}
+            onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => { event.preventDefault(); setDragging(false); acceptFile(event.dataTransfer.files?.[0]); }}
+          >
+            <input ref={inputRef} id="video-file" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.mp4,.avi,.mov,.mkv,.webm" onChange={(event) => acceptFile(event.target.files?.[0])} hidden />
+            <span className={`upload-icon ${busy ? "spin" : ""}`}><Icon name={busy ? "loader" : "upload_file"} /></span>
+            <h3>{busy ? "Preparing source…" : "Drop a video file here"}</h3>
+            <p>We store the source and extract its first frame for ROI and lane annotation.</p>
+            <button className="primary-button" type="button" disabled={busy} onClick={() => inputRef.current?.click()}><Icon name="folder" /> Browse files</button>
+          </div>
+        ) : (
+          <form className="live-source-form" onSubmit={resolveUrl}>
+            <label htmlFor="live-source-url">Stream URL</label>
+            <div className="live-controls">
+              <input id="live-source-url" value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://… or rtsp://…" autoComplete="url" />
+              <button className="primary-button" disabled={busy || !liveUrl.trim()} type="submit"><Icon name={busy ? "loader" : "broadcast"} /> {busy ? "Resolving…" : "Resolve source"}</button>
+            </div>
+            <p className="hint-text">Resolve a preview snapshot first. Live inference starts after ROI, lanes, and direction are validated.</p>
+          </form>
+        )}
+      </section>
+      <div className="source-capabilities" aria-label="Supported source types">
+        <span><Icon name="check" /> Preview-first workflow</span>
+        <span><Icon name="check" /> ROI-aware inference</span>
+        <span><Icon name="check" /> Batch and live modes</span>
       </div>
       <div id="system-logs"><Terminal lines={logs} /></div>
     </div>
@@ -485,10 +519,11 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
       <section className="canvas-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Region of interest</p>
-            <h2>ROI Masking Canvas</h2>
+            <p className="eyebrow">02 / Region of interest</p>
+            <h2>Frame the road, remove the noise.</h2>
+            <p className="panel-subtitle">Define the area that belongs to the road scene. Points can be added by clicking or refined by dragging.</p>
           </div>
-          <span className="meta-pill">{vertices.length} pts · {Math.round(cropRect.width)} x {Math.round(cropRect.height)}</span>
+          <span className="meta-pill"><span className="live-indicator" /> {vertices.length} points</span>
         </div>
         <canvas
           ref={canvasRef}
@@ -496,6 +531,8 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
           width={preview.width}
           height={preview.height}
           style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
+          tabIndex="0"
+          aria-label="ROI annotation canvas. Click to add a point and drag existing points to refine the polygon."
           onMouseDown={handleDown}
           onMouseMove={handleMove}
           onMouseUp={handleUp}
@@ -503,22 +540,22 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
         />
       </section>
       <aside className="tool-panel">
-        <p className="eyebrow">Crop transform</p>
-        <h3>Confirm focused frame</h3>
-        <p>Click to add ROI points, drag anchors to refine the road polygon. Detection stays full-frame; ROI is used for analytics, lane context, and operator review.</p>
+        <p className="eyebrow">Annotation inspector</p>
+        <h3>Confirm the working area</h3>
+        <p>Detection remains full-frame. This ROI drives the processing crop, lane context, and operator review.</p>
         <Metric label="ROI Points" value={vertices.length} />
         <Metric label="Crop X" value={Math.round(cropRect.x)} />
         <Metric label="Crop Y" value={Math.round(cropRect.y)} />
         <Metric label="Width" value={Math.round(cropRect.width)} />
         <Metric label="Height" value={Math.round(cropRect.height)} />
         <div className="button-row">
-          <button className="secondary-button" onClick={removeSelectedPoint} disabled={selectedIndex === null || vertices.length <= 3}>Delete Point</button>
-          <button className="secondary-button" onClick={resetRoi} title="Return to the recommended road ROI">Reset ROI</button>
-          <button className="secondary-button" onClick={useFullFrameRoi} title="Use the whole frame as analytics ROI">Full Frame</button>
+          <button className="secondary-button" onClick={removeSelectedPoint} disabled={selectedIndex === null || vertices.length <= 3}><Icon name="delete" /> Delete point</button>
+          <button className="secondary-button" onClick={resetRoi} title="Return to the recommended road ROI"><Icon name="restart" /> Reset</button>
+          <button className="secondary-button" onClick={useFullFrameRoi} title="Use the whole frame as analytics ROI">Full frame</button>
         </div>
         <div className="button-row">
-          <button className="secondary-button" onClick={onBack}>Back</button>
-          <button className="primary-button" disabled={!canConfirm} onClick={() => onConfirm({ polygon: vertices, cropRect })}>Confirm ROI</button>
+          <button className="secondary-button" onClick={onBack}><Icon name="arrow_left" /> Back</button>
+          <button className="primary-button" disabled={!canConfirm} onClick={() => onConfirm({ polygon: vertices, cropRect })}>Continue to lanes <Icon name="arrow_right" /></button>
         </div>
       </aside>
     </div>
@@ -603,13 +640,14 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
       <section className="canvas-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Lane geometry</p>
-            <h2>Focused Crop Editor</h2>
+            <p className="eyebrow">03 / Lane geometry</p>
+            <h2>Teach the engine how traffic moves.</h2>
+            <p className="panel-subtitle">Create a zone, a counting line, and a direction vector for every lane.</p>
           </div>
           <div className="segmented">
-            <button className={mode === "zone" ? "active" : ""} onClick={() => setMode("zone")}>Zone</button>
-            <button className={mode === "line" ? "active" : ""} onClick={() => setMode("line")}>Line</button>
-            <button className={mode === "direction" ? "active" : ""} onClick={() => setMode("direction")}>Arrow</button>
+            <button className={mode === "zone" ? "active" : ""} onClick={() => setMode("zone")}><Icon name="polygon" /> Zone</button>
+            <button className={mode === "line" ? "active" : ""} onClick={() => setMode("line")}><Icon name="minus" /> Count line</button>
+            <button className={mode === "direction" ? "active" : ""} onClick={() => setMode("direction")}><Icon name="arrow_right" /> Direction</button>
           </div>
         </div>
         <canvas
@@ -618,6 +656,8 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
           width={crop.width}
           height={crop.height}
           style={{ aspectRatio: `${crop.width} / ${crop.height}` }}
+          tabIndex="0"
+          aria-label="Lane annotation canvas. Select a tool and click or drag on the crop to define lane geometry."
           onMouseDown={handleDown}
           onMouseMove={handleMove}
           onMouseUp={handleUp}
@@ -628,10 +668,10 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
         <div className="panel-header compact">
           <div>
             <p className="eyebrow">Lane registry</p>
-            <h3>{lanes.length} lanes</h3>
+            <h3>{lanes.length} {lanes.length === 1 ? "lane" : "lanes"}</h3>
           </div>
-          <button className="icon-button solid" onClick={addLane} aria-label="Add lane">
-            <span className="material-symbols-outlined">add</span>
+            <button className="icon-button solid" onClick={addLane} aria-label="Add lane">
+            <Icon name="add" />
           </button>
         </div>
         <div className="lane-list">
@@ -644,7 +684,7 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
                 aria-label={`Lane ${index + 1} name`}
               />
               <button className="icon-button" onClick={(event) => { event.stopPropagation(); removeLane(lane.id); }} aria-label="Remove lane">
-                <span className="material-symbols-outlined">delete</span>
+                <Icon name="delete" />
               </button>
             </div>
           ))}
@@ -652,7 +692,7 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
         <SettingsPanel settings={settings} setSettings={setSettings} />
         <div className="button-row">
           <button className="secondary-button" onClick={onBack}>Back</button>
-          <button className="primary-button" disabled={!canSubmit} title={canSubmit ? "Validate geometry and continue" : "Draw each lane zone, counting line, and direction arrow first"} onClick={() => onSubmit(lanes)}>{sourceMode === "live" ? "Validate Live Config" : "Submit Batch Task"}</button>
+          <button className="primary-button" disabled={!canSubmit} title={canSubmit ? "Validate geometry and continue" : "Draw each lane zone, counting line, and direction arrow first"} onClick={() => onSubmit(lanes)}>{sourceMode === "live" ? "Validate live setup" : "Start batch analysis"} <Icon name="arrow_right" /></button>
         </div>
       </aside>
     </div>
@@ -827,7 +867,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       ? "Geometry valid — click Start Live to begin inference."
       : "Resolve a source and draw ROI, lanes, counting line, and direction vector first.";
   const liveFrameUrl = liveSession?.session_id
-    ? `/live/sessions/${liveSession.session_id}/stream`
+    ? apiUrl(`/live/sessions/${liveSession.session_id}/stream`)
     : null;
   const liveReadinessItems = [
     {
@@ -876,8 +916,9 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
       <section className="media-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Async worker stream</p>
-            <h2>Analytics Dashboard</h2>
+            <p className="eyebrow">04 / Analysis run</p>
+            <h2>Read the traffic story.</h2>
+            <p className="panel-subtitle">Monitor processing health and inspect the annotated output as it becomes available.</p>
           </div>
           <span className={`meta-pill status-${sourceMode === "live" ? liveStatusLabel : (taskStatus.status || "queued")}`}>{sourceMode === "live" ? liveStatusLabel : (taskStatus.stage || taskStatus.status || "queued")}</span>
         </div>
@@ -888,9 +929,10 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
             <div className="video-player live-placeholder">Live output appears here after the first inferred frame.</div>
           )
         ) : (
-          <video className="video-player" src={visibleResult.outputs?.video_path || videoUrl} controls muted />
+          <video className="video-player" src={apiUrl(visibleResult.outputs?.video_path || videoUrl)} controls muted />
         )}
-        <div className="progress-track">
+        <div className="progress-meta"><span>Processing progress</span><strong>{progress}%</strong></div>
+        <div className="progress-track" aria-label={`Processing progress ${progress}%`} role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}>
           <div style={{ width: `${progress}%` }} />
         </div>
         <div className="output-summary">
@@ -905,7 +947,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
         <Metric label="Stage" value={taskStatus.stage || taskStatus.status || "--"} />
         <Metric label="Frames" value={`${visibleResult.frames}/${visibleResult.total_frames}`} />
         <Metric label="Total Count" value={visibleResult.total_count} />
-        <button className="secondary-button full" onClick={onJson}>View JSON</button>
+        <button className="secondary-button full" onClick={onJson}><Icon name="code" /> Inspect payload</button>
       </aside>
       <section className="live-panel">
         <div className="panel-header compact">
@@ -923,7 +965,7 @@ function AnalyticsDashboard({ taskId, videoUrl, taskStatus, setTaskStatus, resul
           </div>
           {liveReadinessItems.map((item) => (
             <div className={`readiness-item ${item.ready ? "ready" : "blocked"}`} key={item.label}>
-              <span className="material-symbols-outlined">{item.ready ? "check_circle" : "radio_button_unchecked"}</span>
+              <Icon name={item.ready ? "check" : "circle"} />
               <div>
                 <strong>{item.label}</strong>
                 <small>{item.detail}</small>
@@ -1039,17 +1081,59 @@ function Metric({ label, value, small = false }) {
   );
 }
 
+function Icon({ name }) {
+  const paths = {
+    traffic: <><path d="M5 19h14" /><path d="M7 16V8l2-3h6l2 3v8" /><path d="M7 11h10" /><circle cx="9" cy="16" r="1" /><circle cx="15" cy="16" r="1" /></>,
+    restart: <><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></>,
+    upload_file: <><path d="M12 3v11" /><path d="m8 7 4-4 4 4" /><path d="M5 14v5h14v-5" /></>,
+    folder: <><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" /><path d="M3.5 9h17" /></>,
+    broadcast: <><path d="M7.1 7.1a7 7 0 0 0 0 9.8" /><path d="M16.9 7.1a7 7 0 0 1 0 9.8" /><path d="M9.9 9.9a3 3 0 0 0 0 4.2" /><path d="M14.1 9.9a3 3 0 0 1 0 4.2" /><circle cx="12" cy="12" r="1" /></>,
+    crop_free: <><path d="M7 3H5a2 2 0 0 0-2 2v2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><path d="M17 21h2a2 2 0 0 0 2-2v-2" /></>,
+    timeline: <><path d="M4 17h4l3-6h5l4-6" /><circle cx="4" cy="17" r="1.5" /><circle cx="11" cy="11" r="1.5" /><circle cx="16" cy="11" r="1.5" /></>,
+    analytics: <><path d="M4 19V5" /><path d="M4 19h16" /><path d="m7 15 3-4 3 2 5-7" /></>,
+    dashboard: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+    videocam: <><path d="m15 10 5-3v10l-5-3" /><rect x="3" y="6" width="12" height="12" rx="2" /></>,
+    schema: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="15" width="6" height="6" rx="1" /><path d="M9 6h3a3 3 0 0 1 3 3v6" /></>,
+    terminal: <><path d="m5 7 4 4-4 4" /><path d="M12 17h7" /></>,
+    code: <><path d="m8 9-3 3 3 3" /><path d="m16 9 3 3-3 3" /><path d="m14 5-4 14" /></>,
+    error: <><circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16h.01" /></>,
+    info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></>,
+    close: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>,
+    arrow_left: <><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></>,
+    arrow_right: <><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></>,
+    minus: <path d="M5 12h14" />,
+    polygon: <><path d="m5 5 14 2-4 12-12-6z" /><circle cx="5" cy="5" r="1.5" /><circle cx="19" cy="7" r="1.5" /><circle cx="15" cy="19" r="1.5" /><circle cx="3" cy="13" r="1.5" /></>,
+    loader: <><path d="M12 3a9 9 0 1 0 9 9" /></>,
+    add: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
+    delete: <><path d="M4 7h16" /><path d="M10 11v5M14 11v5" /><path d="m6 7 1 13h10l1-13" /><path d="M9 7V4h6v3" /></>,
+    check: <><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></>,
+    circle: <circle cx="12" cy="12" r="8" />,
+  };
+  return <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name] || paths.info}</svg>;
+}
+
 function JsonModal({ title, data, onClose }) {
+  const closeButtonRef = useRef(null);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="json-modal">
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="json-modal" role="dialog" aria-modal="true" aria-labelledby="payload-title">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Raw payload</p>
-            <h2>{title}</h2>
+            <h2 id="payload-title">{title}</h2>
           </div>
-          <button className="icon-button solid" onClick={onClose} aria-label="Close modal">
-            <span className="material-symbols-outlined">close</span>
+          <button ref={closeButtonRef} className="icon-button solid" onClick={onClose} aria-label="Close modal">
+            <Icon name="close" />
           </button>
         </div>
         <pre>{JSON.stringify(data, null, 2)}</pre>
@@ -1061,7 +1145,7 @@ function JsonModal({ title, data, onClose }) {
 async function uploadVideo(file) {
   const form = new FormData();
   form.append("file", file);
-  return apiRequest("/videos", { method: "POST", body: form });
+  return normalizeSource(await apiRequest("/videos", { method: "POST", body: form }));
 }
 
 async function fetchPreview(taskId) {
@@ -1088,29 +1172,29 @@ async function validateLiveConfig(config) {
 }
 
 async function submitTask(taskId, config) {
-  return apiRequest("/tasks", {
+  return normalizeTaskStatus(await apiRequest("/tasks", {
     method: "POST",
     body: JSON.stringify({ task_id: taskId, lane_config: config }),
-  });
+  }));
 }
 
 async function pollTask(taskId) {
-  return apiRequest(`/tasks/${taskId}`);
+  return normalizeTaskStatus(await apiRequest(`/tasks/${taskId}`));
 }
 
 async function fetchResult(taskId) {
-  return apiRequest(`/tasks/${taskId}/result`);
+  return normalizeAnalyticsResult(await apiRequest(`/tasks/${taskId}/result`));
 }
 
 async function createLiveSession(sourceUrl, laneConfig) {
-  return apiRequest("/live/sessions", {
+  return normalizeLiveSession(await apiRequest("/live/sessions", {
     method: "POST",
     body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
-  });
+  }));
 }
 
 async function fetchLiveSession(sessionId) {
-  return apiRequest(`/live/sessions/${sessionId}`);
+  return normalizeLiveSession(await apiRequest(`/live/sessions/${sessionId}`));
 }
 
 async function stopLive(sessionId) {
@@ -1203,7 +1287,7 @@ function drawRoiCanvas(canvas, preview, vertices, cropRect, selectedIndex) {
 
   if (vertices.length >= 3) {
     ctx.save();
-    ctx.fillStyle = "rgba(38, 37, 30, 0.48)";
+    ctx.fillStyle = "rgba(15, 29, 46, 0.48)";
     ctx.beginPath();
     ctx.rect(0, 0, canvas.width, canvas.height);
     ctx.moveTo(vertices[0].x, vertices[0].y);
@@ -1222,8 +1306,8 @@ function drawRoiCanvas(canvas, preview, vertices, cropRect, selectedIndex) {
     ctx.restore();
   }
 
-  drawPolygon(ctx, vertices, "#f54e00", "rgba(245, 78, 0, 0.1)");
-  vertices.forEach((point, index) => drawHandle(ctx, point, index + 1, index === selectedIndex ? "#26251e" : "#f54e00"));
+  drawPolygon(ctx, vertices, "#b45309", "rgba(180, 83, 9, 0.12)");
+  vertices.forEach((point, index) => drawHandle(ctx, point, index + 1, index === selectedIndex ? "#102138" : "#b45309"));
 }
 
 function drawLaneCanvas(canvas, crop, lanes, activeLaneId, mode, draft) {
@@ -1236,14 +1320,14 @@ function drawLaneCanvas(canvas, crop, lanes, activeLaneId, mode, draft) {
 
   lanes.forEach((lane) => {
     const active = lane.id === activeLaneId;
-    if (lane.valid_zone.length) drawPolygon(ctx, lane.valid_zone, lane.color, active ? "rgba(245, 78, 0, 0.08)" : "rgba(255,255,255,0.05)");
+    if (lane.valid_zone.length) drawPolygon(ctx, lane.valid_zone, lane.color, active ? "rgba(37, 99, 235, 0.12)" : "rgba(255,255,255,0.05)");
     if (lane.counting_line.length === 2) drawSegment(ctx, lane.counting_line[0], lane.counting_line[1], lane.color, false);
     if (lane.direction.length === 2) drawSegment(ctx, lane.direction[0], lane.direction[1], lane.color, true);
     [...lane.valid_zone, ...lane.counting_line, ...lane.direction].forEach((point) => drawHandle(ctx, point, "", lane.color));
     if (lane.valid_zone[0]) drawLabel(ctx, lane.lane_id, lane.valid_zone[0], lane.color);
   });
 
-  if (draft) drawSegment(ctx, draft.start, draft.end, mode === "direction" ? "#f54e00" : "#26251e", draft.target === "direction");
+  if (draft) drawSegment(ctx, draft.start, draft.end, mode === "direction" ? "#b45309" : "#1e40af", draft.target === "direction");
 }
 
 function drawPolygon(ctx, points, stroke, fill) {
@@ -1297,7 +1381,7 @@ function drawHandle(ctx, point, label, color) {
   ctx.stroke();
   if (label) {
     ctx.fillStyle = color;
-    ctx.font = "600 12px Inter";
+    ctx.font = "600 12px Fira Sans";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, point.x, point.y);
@@ -1307,7 +1391,7 @@ function drawHandle(ctx, point, label, color) {
 
 function drawLabel(ctx, text, point, color) {
   ctx.save();
-  ctx.font = "600 14px JetBrains Mono";
+  ctx.font = "600 14px Fira Code";
   const width = ctx.measureText(text).width + 18;
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.strokeStyle = color;
@@ -1316,7 +1400,7 @@ function drawLabel(ctx, text, point, color) {
   ctx.roundRect(point.x + 12, point.y - 30, width, 24, 6);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = "#26251e";
+  ctx.fillStyle = "#102138";
   ctx.fillText(text, point.x + 21, point.y - 13);
   ctx.restore();
 }
