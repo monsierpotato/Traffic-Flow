@@ -40,11 +40,11 @@ The upload response intentionally aliases `video_id` as `task_id` in the compati
 
 ```text
 handleLiveResolve
-  -> POST /live/resolve
+  -> POST /live/resolve (source_id; signed media URL remains server-side)
   -> GET /live/sources/{source_id}/preview (using returned preview_url)
   -> buildLaneConfig
   -> validateLiveConfig -> POST /live/validate-config
-  -> createLiveSession -> POST /live/sessions
+  -> createLiveSession -> POST /live/sessions ({source_id, source_url, lane_config})
   -> fetchLiveSession -> GET /live/sessions/{session_id}
   -> MJPEG GET /live/sessions/{session_id}/stream
   -> stopLive -> DELETE /live/sessions/{session_id}

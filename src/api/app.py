@@ -12,6 +12,7 @@ from shared.config import settings
 from shared import database
 from api.routes.router import v1_router
 from api.services import cleanup_service
+from api.services.live_service import live_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 async def _scheduled_cleanup() -> None:
     """Stable scheduler entrypoint; keeps the service dependency patchable in tests."""
     await cleanup_service.run_data_cleanup()
+    removed_sessions = live_manager.cleanup_stale()
+    if removed_sessions:
+        logger.info("Removed %s stale live sessions.", removed_sessions)
 
 
 @asynccontextmanager

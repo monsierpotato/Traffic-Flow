@@ -1,31 +1,41 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 import time
 import uuid
-import shutil
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.services.live_service import live_manager
+from api.services.youtube_resolver import (
+    ResolvedMedia,
+    SourceResolutionError,
+    is_youtube_url,
+    media_url_needs_refresh,
+    redact_process_detail,
+    resolve_youtube_url,
+    validate_direct_source_url,
+)
 from shared.config import settings
 
 router = APIRouter()
 
 LIVE_PREVIEW_DIR = Path(settings.STORAGE_DIR) / "live_previews"
 LIVE_SOURCES: Dict[str, dict] = {}
+LIVE_SOURCES_LOCK = threading.Lock()
 
 
 class LiveSessionCreate(BaseModel):
     source_url: str = Field(..., min_length=3)
+    source_id: Optional[str] = Field(default=None, min_length=1)
     lane_config: Optional[Dict[str, Any]] = None
     frame_skip: int = Field(default=1, ge=1, le=10)
 
@@ -38,13 +48,79 @@ class LiveConfigValidate(BaseModel):
     lane_config: Dict[str, Any]
 
 
-def _is_youtube_url(url: str) -> bool:
-    host = urlparse(url).netloc.lower()
-    return "youtube.com" in host or "youtu.be" in host
+def _raise_resolution_error(exc: SourceResolutionError) -> None:
+    raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _prune_sources() -> None:
+    cutoff = time.time() - settings.LIVE_SOURCE_TTL_SECONDS
+    expired: list[dict] = []
+    with LIVE_SOURCES_LOCK:
+        for source_id, source in list(LIVE_SOURCES.items()):
+            if source.get("updated_at", source.get("created_at", 0)) < cutoff:
+                expired.append(LIVE_SOURCES.pop(source_id))
+    for source in expired:
+        preview_path = source.get("preview_path")
+        if preview_path:
+            try:
+                Path(preview_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _get_source(source_id: str) -> Optional[dict]:
+    _prune_sources()
+    with LIVE_SOURCES_LOCK:
+        return LIVE_SOURCES.get(source_id)
+
+
+def _public_source(source: dict) -> dict:
+    """Never expose a signed YouTube media URL or a filesystem path."""
+    public = {key: value for key, value in source.items() if key not in {"preview_path", "resolved_url"}}
+    if is_youtube_url(source["original_url"]):
+        public["source_url"] = source["original_url"]
+    else:
+        public["source_url"] = source["resolved_url"]
+    return public
+
+
+def _validate_source_input(url: str) -> None:
+    if is_youtube_url(url):
+        return
+    try:
+        validate_direct_source_url(url)
+    except SourceResolutionError as exc:
+        _raise_resolution_error(exc)
+
+
+def _resolve_media(url: str) -> ResolvedMedia:
+    _validate_source_input(url)
+    if is_youtube_url(url):
+        try:
+            return resolve_youtube_url(url)
+        except SourceResolutionError as exc:
+            _raise_resolution_error(exc)
+    return ResolvedMedia(url=url)
+
+
+async def _refresh_source(source: dict, *, capture: bool = False) -> dict:
+    media = await asyncio.to_thread(_resolve_media, source["original_url"])
+    source.update(
+        {
+            "resolved_url": media.url,
+            "source_type": _source_type(media.url, source["original_url"]),
+            "resolved_expires_at": media.expires_at,
+            "updated_at": time.time(),
+        }
+    )
+    if capture:
+        snapshot = await asyncio.to_thread(_capture_snapshot, media.url, source["source_id"])
+        source.update(snapshot)
+    return source
 
 
 def _source_type(url: str, original_url: str) -> str:
-    if _is_youtube_url(original_url):
+    if is_youtube_url(original_url):
         return "youtube_hls" if ".m3u8" in url else "youtube_media"
     parsed = urlparse(url)
     path = parsed.path.lower()
@@ -59,83 +135,50 @@ def _source_type(url: str, original_url: str) -> str:
     return "direct_stream"
 
 
-def _resolve_youtube_url(url: str) -> str:
-    yt_dlp_options = []
-    if settings.YTDLP_COOKIES_FILE:
-        yt_dlp_options.extend(["--cookies", _writable_cookies_file(settings.YTDLP_COOKIES_FILE)])
-    if settings.YTDLP_JS_RUNTIME:
-        yt_dlp_options.extend(["--js-runtimes", settings.YTDLP_JS_RUNTIME])
-    if settings.YTDLP_REMOTE_COMPONENTS:
-        yt_dlp_options.extend(["--remote-components", settings.YTDLP_REMOTE_COMPONENTS])
-    cmd = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        *yt_dlp_options,
-        "--no-playlist",
-        "--get-url",
-        "-f",
-        "best[protocol^=m3u8]/best",
-        url,
-    ]
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=45)
-    except FileNotFoundError as exc:
-        raise HTTPException(500, "yt-dlp is not installed in the API environment") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or str(exc)).strip()[-1200:]
-        raise HTTPException(422, f"Could not resolve YouTube URL with yt-dlp: {detail}") from exc
-    urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if not urls:
-        raise HTTPException(422, "yt-dlp did not return a playable media URL")
-    return urls[0]
-
-
-def _writable_cookies_file(source_path: str) -> str:
-    source = Path(source_path)
-    if not source.exists():
-        raise HTTPException(422, f"Configured YouTube cookies file is missing: {source_path}")
-    LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    target = LIVE_PREVIEW_DIR / "yt_dlp_cookies.txt"
-    try:
-        shutil.copyfile(source, target)
-    except Exception as exc:
-        raise HTTPException(500, f"Could not prepare writable YouTube cookies file: {exc}") from exc
-    return str(target)
-
-
 def _capture_snapshot(source_url: str, source_id: str) -> dict:
     LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    cap = cv2.VideoCapture(source_url)
+    import subprocess
+
+    command = [
+        settings.LIVE_FFMPEG_BIN,
+        "-hide_banner",
+        "-loglevel", settings.LIVE_FFMPEG_LOGLEVEL,
+        "-nostdin",
+        "-rw_timeout", str(settings.LIVE_FFMPEG_RW_TIMEOUT_US),
+        "-i", source_url,
+        "-frames:v", "1",
+        "-f", "image2pipe",
+        "-vcodec", "mjpeg",
+        "pipe:1",
+    ]
     try:
-        if not cap.isOpened():
-            raise HTTPException(422, "OpenCV could not open this source URL from the backend process")
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        frame = None
-        ok = False
-        for _ in range(30):
-            ok, candidate = cap.read()
-            if ok and candidate is not None:
-                frame = candidate
-                break
-        if frame is None:
-            raise HTTPException(422, "Source opened but no video frame could be read")
-        height, width = frame.shape[:2]
-        preview_path = LIVE_PREVIEW_DIR / f"{source_id}.jpg"
-        success = cv2.imwrite(str(preview_path), frame)
-        if not success:
-            raise HTTPException(500, "Could not write live source preview frame")
-        return {
-            "width": width,
-            "height": height,
-            "fps": round(fps, 3),
-            "preview_path": str(preview_path),
-            "preview_url": f"/live/sources/{source_id}/preview",
-        }
-    finally:
-        cap.release()
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            timeout=settings.LIVE_PREVIEW_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(500, "FFmpeg is not installed in the API environment") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(504, "Timed out while capturing the live source preview") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = redact_process_detail((exc.stderr or b"").decode("utf-8", errors="ignore"))
+        raise HTTPException(422, f"Could not capture a frame from the live source: {detail}") from exc
+    frame = cv2.imdecode(np.frombuffer(result.stdout, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(422, "Source opened but no video frame could be decoded")
+    height, width = frame.shape[:2]
+    preview_path = LIVE_PREVIEW_DIR / f"{source_id}.jpg"
+    if not cv2.imwrite(str(preview_path), frame):
+        raise HTTPException(500, "Could not write live source preview frame")
+    return {
+        "width": width,
+        "height": height,
+        "fps": 0.0,
+        "preview_path": str(preview_path),
+        "preview_url": f"/live/sources/{source_id}/preview",
+    }
 
 
 def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
@@ -194,40 +237,40 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
 @router.post("/resolve")
 async def resolve_live_source(payload: LiveSourceResolve):
     original_url = payload.url.strip()
-    resolved_url = (
-        await asyncio.to_thread(_resolve_youtube_url, original_url)
-        if _is_youtube_url(original_url)
-        else original_url
-    )
+    if not original_url:
+        raise HTTPException(422, "Source URL is required")
+    media = await asyncio.to_thread(_resolve_media, original_url)
     source_id = str(uuid.uuid4())
-    snapshot = await asyncio.to_thread(_capture_snapshot, resolved_url, source_id)
+    snapshot = await asyncio.to_thread(_capture_snapshot, media.url, source_id)
     source = {
         "source_id": source_id,
         "original_url": original_url,
-        "resolved_url": resolved_url,
-        "source_url": resolved_url,
-        "source_type": _source_type(resolved_url, original_url),
+        "resolved_url": media.url,
+        "source_url": original_url if is_youtube_url(original_url) else media.url,
+        "source_type": _source_type(media.url, original_url),
+        "resolved_expires_at": media.expires_at,
         "created_at": time.time(),
+        "updated_at": time.time(),
         **snapshot,
     }
-    LIVE_SOURCES[source_id] = source
-    return {k: v for k, v in source.items() if k != "preview_path"}
+    _prune_sources()
+    with LIVE_SOURCES_LOCK:
+        LIVE_SOURCES[source_id] = source
+    return _public_source(source)
 
 
 @router.post("/sources/{source_id}/snapshot")
 async def refresh_live_snapshot(source_id: str):
-    source = LIVE_SOURCES.get(source_id)
+    source = _get_source(source_id)
     if not source:
         raise HTTPException(404, "Live source not found")
-    snapshot = await asyncio.to_thread(_capture_snapshot, source["resolved_url"], source_id)
-    source.update(snapshot)
-    source["updated_at"] = time.time()
-    return {k: v for k, v in source.items() if k != "preview_path"}
+    await _refresh_source(source, capture=True)
+    return _public_source(source)
 
 
 @router.get("/sources/{source_id}/preview")
 async def get_live_preview(source_id: str):
-    source = LIVE_SOURCES.get(source_id)
+    source = _get_source(source_id)
     if not source:
         raise HTTPException(404, "Live source not found")
     preview_path = Path(source["preview_path"])
@@ -247,10 +290,37 @@ async def create_live_session(payload: LiveSessionCreate):
     valid, errors = _validate_lane_config(payload.lane_config or {})
     if not valid:
         raise HTTPException(422, {"message": "Valid lane_config is required before live counting", "errors": errors})
+    active_sessions = [
+        session for session in live_manager.list()
+        if session.status in {"starting", "running", "stopping"}
+    ]
+    if len(active_sessions) >= settings.LIVE_MAX_SESSIONS:
+        raise HTTPException(429, "Maximum number of concurrent live sessions reached")
+
+    source = _get_source(payload.source_id) if payload.source_id else None
+    source_origin_url = None
+    if source:
+        source_origin_url = source["original_url"] if is_youtube_url(source["original_url"]) else None
+        if source_origin_url:
+            if media_url_needs_refresh(source.get("resolved_expires_at")):
+                await _refresh_source(source)
+        source_url = source["resolved_url"]
+        source_expires_at = source.get("resolved_expires_at")
+    else:
+        # Backward-compatible clients may still send a URL instead of source_id.
+        # YouTube page URLs are resolved here so starting a session never passes
+        # a page URL into FFmpeg.
+        media = await asyncio.to_thread(_resolve_media, payload.source_url)
+        source_url = media.url
+        source_origin_url = payload.source_url if is_youtube_url(payload.source_url) else None
+        source_expires_at = media.expires_at
+
     session = live_manager.create(
-        source_url=payload.source_url,
+        source_url=source_url,
         lane_config=payload.lane_config,
         frame_skip=payload.frame_skip,
+        source_origin_url=source_origin_url,
+        source_expires_at=source_expires_at,
     )
     return session.snapshot()
 

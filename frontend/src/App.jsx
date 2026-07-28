@@ -4,6 +4,7 @@ import {
   apiRequest,
   apiUrl,
   normalizeAnalyticsResult,
+  normalizeDashboardStats,
   normalizeLiveSession,
   normalizeSource,
   normalizeTaskStatus,
@@ -21,6 +22,7 @@ const VIEWS = [
   { id: "sources", label: "Sources", icon: "videocam", help: "Upload a recording or resolve a live stream." },
   { id: "geometry", label: "Geometry", icon: "schema", help: "Define the ROI, lane zones, counting lines, and directions." },
   { id: "runs", label: "Batch Runs", icon: "analytics", help: "Track a submitted recording and inspect its result." },
+  { id: "reports", label: "Reports", icon: "download", help: "Export the current result and review recent tasks." },
   { id: "live", label: "Live Monitor", icon: "broadcast", help: "Start and monitor one live inference session." },
   { id: "logs", label: "System Logs", icon: "terminal", help: "Review runtime events and failures." },
 ];
@@ -47,6 +49,15 @@ const emptyResult = {
   outputs: {},
 };
 
+const emptyDashboardStats = {
+  total_tasks: 0,
+  completed_tasks: 0,
+  failed_tasks: 0,
+  processing_tasks: 0,
+  recent_tasks: [],
+  vehicle_totals_by_type: {},
+};
+
 function App() {
   const [stepIndex, setStepIndex] = useState(0);
   const [activeView, setActiveView] = useState("dashboard");
@@ -71,9 +82,26 @@ function App() {
   const [submittedConfig, setSubmittedConfig] = useState(null);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [operatorAlert, setOperatorAlert] = useState(null);
+  const [runtimeHealth, setRuntimeHealth] = useState("checking");
+  const [dashboardStats, setDashboardStats] = useState(emptyDashboardStats);
+  const [dashboardStatsState, setDashboardStatsState] = useState("idle");
+  const [dashboardStatsError, setDashboardStatsError] = useState("");
 
   const appendLog = useCallback((line) => {
     setLogs((current) => [...current.slice(-9), `> ${line}`]);
+  }, []);
+
+  const refreshDashboardStats = useCallback(async () => {
+    setDashboardStatsState("loading");
+    setDashboardStatsError("");
+    try {
+      const payload = await apiRequest("/api/v1/dashboard/stats");
+      setDashboardStats(normalizeDashboardStats(payload));
+      setDashboardStatsState("ready");
+    } catch (error) {
+      setDashboardStatsState("error");
+      setDashboardStatsError(error.message || "Dashboard statistics are unavailable.");
+    }
   }, []);
 
   const resetWorkflow = useCallback(() => {
@@ -113,6 +141,30 @@ function App() {
     if (viewId === "geometry") goTo(crop ? 2 : 1);
     if (viewId === "runs" || viewId === "live") goTo(3);
   }, [crop, goTo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkRuntimeHealth = async () => {
+      try {
+        await apiRequest("/health");
+        if (!cancelled) setRuntimeHealth("online");
+      } catch {
+        if (!cancelled) setRuntimeHealth("offline");
+      }
+    };
+    checkRuntimeHealth();
+    const timer = window.setInterval(checkRuntimeHealth, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    refreshDashboardStats();
+    const timer = window.setInterval(refreshDashboardStats, 30000);
+    return () => window.clearInterval(timer);
+  }, [refreshDashboardStats]);
 
   useEffect(() => {
     let saved;
@@ -184,11 +236,18 @@ function App() {
     }
 
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setTaskId("");
     const localVideoUrl = URL.createObjectURL(file);
     setVideoFile(file);
     setVideoUrl(localVideoUrl);
     setSourceMode("video");
     setLiveSource(null);
+    setPreview(null);
+    setRoi(null);
+    setCrop(null);
+    setResult(null);
+    setSubmittedConfig(null);
+    setTaskStatus({ status: "uploading", progress: 0, stage: "uploading" });
     appendLog(`uploading ${file.name}`);
 
     try {
@@ -214,6 +273,16 @@ function App() {
 
   async function handleLiveResolve(url) {
     if (!url?.trim()) return;
+    if (videoUrl?.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
+    setTaskId("");
+    setVideoFile(null);
+    setVideoUrl("");
+    setPreview(null);
+    setRoi(null);
+    setCrop(null);
+    setResult(null);
+    setSubmittedConfig(null);
+    setTaskStatus({ status: "resolving", progress: 0, stage: "source_resolve" });
     appendLog(`resolving live source: ${url.trim()}`);
     try {
       setOperatorAlert(null);
@@ -261,7 +330,6 @@ function App() {
       settings,
       videoFile,
     });
-    setSubmittedConfig(config);
     setOperatorAlert(null);
     window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     appendLog(`${sourceMode === "live" ? "validating live" : "submitting"} ${config.lanes.length} lane configs`);
@@ -269,12 +337,14 @@ function App() {
     if (sourceMode === "live") {
       const validation = await validateLiveConfig(config);
       if (!validation.valid) {
+        setSubmittedConfig(null);
         const message = (validation.errors || []).join("; ") || "Geometry validation failed";
         setTaskStatus({ status: "error", progress: 0, stage: "live_config_invalid", stage_detail: message });
         setOperatorAlert({ tone: "error", title: "Live config invalid", message, action: "Return to Lanes and fix each lane zone, counting line, and direction vector." });
         appendLog(`live config invalid: ${message}`);
         return;
       }
+      setSubmittedConfig(config);
       setLanes(laneDrafts);
       setTaskStatus({ status: "configured", progress: 0, stage: "ready_for_live", stage_detail: "Geometry validated" });
       setActiveView("live");
@@ -300,18 +370,31 @@ function App() {
 
   return (
     <div className="app-shell">
-      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} />
+      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} runtimeHealth={runtimeHealth} />
       <main className="app-main">
         <SideNav
           taskStatus={taskStatus}
           result={result}
           activeView={activeView}
+          runtimeHealth={runtimeHealth}
           onNavigate={navigateToView}
         />
         <section className="workspace">
-          {!['dashboard', 'logs'].includes(activeView) && <WizardNav stepIndex={stepIndex} />}
+          {!['dashboard', 'logs', 'reports'].includes(activeView) && <WizardNav stepIndex={stepIndex} />}
           {operatorAlert && <OperatorAlert alert={operatorAlert} onDismiss={() => setOperatorAlert(null)} />}
-          {activeView === "dashboard" && <DashboardHome taskId={taskId} taskStatus={taskStatus} result={result} sourceMode={sourceMode} onNavigate={navigateToView} />}
+          {activeView === "dashboard" && (
+            <DashboardHome
+              taskId={taskId}
+              taskStatus={taskStatus}
+              result={result}
+              sourceMode={sourceMode}
+              stats={dashboardStats}
+              statsState={dashboardStatsState}
+              statsError={dashboardStatsError}
+              onRefreshStats={refreshDashboardStats}
+              onNavigate={navigateToView}
+            />
+          )}
           {activeView === "sources" && <UploadStep onUpload={handleUpload} onLiveResolve={handleLiveResolve} />}
           {activeView === "geometry" && stepIndex === 1 && preview && <RoiMaskingStep preview={preview} onBack={() => navigateToStep(0)} onConfirm={handleRoiConfirm} />}
           {activeView === "geometry" && stepIndex === 2 && crop && (
@@ -341,9 +424,11 @@ function App() {
               liveSource={liveSource}
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
+              onAlert={setOperatorAlert}
             />
           )}
           {activeView === "runs" && (!submittedConfig || sourceMode !== "video") && <EmptyState eyebrow="Batch runs" title="No batch run is ready to inspect." message="Batch Runs is only for uploaded recordings. Complete Geometry for a recording, then submit it here." actionLabel="Open Sources" onAction={() => navigateToView("sources")} />}
+          {activeView === "reports" && <ReportsPage result={result} taskId={taskId} stats={dashboardStats} onNavigate={navigateToView} />}
           {activeView === "live" && sourceMode === "live" && submittedConfig && (
             <AnalyticsDashboard
               view="live"
@@ -358,6 +443,7 @@ function App() {
               liveSource={liveSource}
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
+              onAlert={setOperatorAlert}
             />
           )}
           {activeView === "live" && (sourceMode !== "live" || !submittedConfig) && <EmptyState eyebrow="Live monitor" title="Live monitoring is not configured yet." message="Resolve a live source, define its geometry, and validate the configuration before starting a session." actionLabel={sourceMode === "live" ? "Open Geometry" : "Open Sources"} onAction={() => navigateToView(sourceMode === "live" ? "geometry" : "sources")} />}
@@ -369,7 +455,7 @@ function App() {
   );
 }
 
-function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
+function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtimeHealth }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
@@ -379,7 +465,7 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
           <span className="brand-subtitle">Vision operations console</span>
         </div>
       </div>
-      {!['dashboard', 'logs'].includes(activeView) && <nav className="top-steps" aria-label="Workflow">
+      {!['dashboard', 'logs', 'reports'].includes(activeView) && <nav className="top-steps" aria-label="Workflow">
         {STEPS.map((step, index) => (
           <button
             key={step.id}
@@ -393,7 +479,10 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
         ))}
       </nav>}
       <div className="top-actions">
-        <span className="deploy-pill" title="The local API is responding"><span className="live-indicator" /> System online</span>
+        <span className={`deploy-pill health-${runtimeHealth}`} title={runtimeHealth === "online" ? "The API is responding" : "The API health state"}>
+          <span className="live-indicator" />
+          {runtimeHealth === "online" ? "API online" : runtimeHealth === "checking" ? "Checking API" : "API offline"}
+        </span>
         <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
           <Icon name="restart" />
         </button>
@@ -402,14 +491,16 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
   );
 }
 
-function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
+function DashboardHome({ taskId, taskStatus, result, sourceMode, stats, statsState, statsError, onRefreshStats, onNavigate }) {
   const currentState = taskStatus.status || "draft";
+  const vehicleTotal = Object.values(stats.vehicle_totals_by_type || {}).reduce((total, value) => total + Number(value || 0), 0);
   const modules = [
     { id: "sources", icon: "videocam", eyebrow: "01 / Inputs", title: "Sources", text: "Upload a recording or resolve a live stream and create a reference frame." },
     { id: "geometry", icon: "schema", eyebrow: "02 / Annotation", title: "Geometry", text: "Define the ROI, lane zones, counting lines, and direction vectors." },
     { id: "runs", icon: "analytics", eyebrow: "03 / Batch", title: "Batch Runs", text: "Track one submitted recording and inspect its output and lane counts." },
-    { id: "live", icon: "broadcast", eyebrow: "04 / Realtime", title: "Live Monitor", text: "Start one live inference session and monitor its stream health." },
-    { id: "logs", icon: "terminal", eyebrow: "05 / Diagnostics", title: "System Logs", text: "Review runtime events and failures in a dedicated diagnostic view." },
+    { id: "reports", icon: "download", eyebrow: "04 / Reporting", title: "Reports", text: "Export the current result and review recent processing jobs." },
+    { id: "live", icon: "broadcast", eyebrow: "05 / Realtime", title: "Live Monitor", text: "Start one live inference session and monitor its stream health." },
+    { id: "logs", icon: "terminal", eyebrow: "06 / Diagnostics", title: "System Logs", text: "Review runtime events and failures in a dedicated diagnostic view." },
   ];
 
   return (
@@ -425,11 +516,21 @@ function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
           <div><strong>{currentState.replaceAll("_", " ")}</strong><small>{sourceMode === "live" ? "Live source selected" : "Recorded source mode"}</small></div>
         </div>
       </div>
+      <div className="dashboard-toolbar">
+        <span className={`meta-pill stats-state-${statsState}`}>
+          <span className="live-indicator" />
+          {statsState === "loading" ? "Refreshing stats" : statsState === "error" ? "Stats unavailable" : "Fleet overview"}
+        </span>
+        <button className="secondary-button" onClick={onRefreshStats} disabled={statsState === "loading"}>
+          <Icon name="restart" /> {statsState === "loading" ? "Refreshing…" : "Refresh data"}
+        </button>
+      </div>
+      {statsError && <div className="dashboard-data-alert" role="status"><Icon name="info" /><span>{statsError}</span></div>}
       <div className="overview-grid" aria-label="Runtime overview">
-        <Metric label="Runtime state" value={currentState.replaceAll("_", " ")} small />
-        <Metric label="Active source" value={sourceMode === "live" ? "Live stream" : taskId ? "Recording" : "None"} small />
-        <Metric label="Vehicles counted" value={result?.total_count ?? "--"} small />
-        <Metric label="Progress" value={`${taskStatus.progress ?? 0}%`} small />
+        <Metric label="Total jobs" value={stats.total_tasks} small />
+        <Metric label="Completed jobs" value={stats.completed_tasks} small />
+        <Metric label="Processing now" value={stats.processing_tasks} small />
+        <Metric label="Vehicles counted" value={vehicleTotal || result?.total_count || 0} small />
       </div>
       {taskId && (
         <section className="current-work panel-card" aria-labelledby="current-work-title">
@@ -441,6 +542,7 @@ function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
           <button className="secondary-button" onClick={() => onNavigate(sourceMode === "live" ? "live" : "runs")}>Open current workspace <Icon name="arrow_right" /></button>
         </section>
       )}
+      <DashboardInsights stats={stats} statsState={statsState} />
       <div className="module-grid">
         {modules.map((module) => (
           <section className="module-card" key={module.id}>
@@ -452,6 +554,99 @@ function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
           </section>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DashboardInsights({ stats, statsState }) {
+  const vehicleRows = Object.entries(stats.vehicle_totals_by_type || {}).sort(([, left], [, right]) => right - left);
+  const maxVehicleCount = Math.max(1, ...vehicleRows.map(([, count]) => count));
+
+  return (
+    <div className="dashboard-insights">
+      <section className="panel-card recent-tasks-card" aria-labelledby="recent-tasks-title">
+        <div className="insight-heading">
+          <div>
+            <p className="eyebrow">Recent activity</p>
+            <h3 id="recent-tasks-title">Latest processing jobs</h3>
+          </div>
+          <span className="meta-pill">Last {stats.recent_tasks.length || 0}</span>
+        </div>
+        {statsState === "loading" && !stats.recent_tasks.length ? (
+          <p className="hint-text">Loading recent jobs…</p>
+        ) : stats.recent_tasks.length ? (
+          <div className="recent-task-list" role="list">
+            {stats.recent_tasks.map((task) => (
+              <div className="recent-task-row" role="listitem" key={task.task_id}>
+                <div>
+                  <strong>{task.task_id}</strong>
+                  <small>{formatTaskDate(task.created_at)}</small>
+                </div>
+                <span className={`task-status status-${task.status}`}>{task.status.replaceAll("_", " ")}</span>
+                <span className="task-progress">{task.progress}%</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="hint-text">No processing jobs have been recorded yet.</p>
+        )}
+      </section>
+      <section className="tool-panel vehicle-breakdown" aria-labelledby="vehicle-breakdown-title">
+        <p className="eyebrow">Fleet breakdown</p>
+        <h3 id="vehicle-breakdown-title">Vehicles by class</h3>
+        {vehicleRows.length ? vehicleRows.map(([vehicleType, count]) => (
+          <div className="breakdown-row" key={vehicleType}>
+            <span>{vehicleType}</span>
+            <div className="bar-track"><div style={{ width: `${Math.min(100, (count / maxVehicleCount) * 100)}%` }} /></div>
+            <strong>{count}</strong>
+          </div>
+        )) : <p className="hint-text">Vehicle totals appear after a completed run.</p>}
+      </section>
+    </div>
+  );
+}
+
+function ReportsPage({ result, taskId, stats, onNavigate }) {
+  const reportTaskId = result?.task_id || taskId || "trafficflow-report";
+  const hasResult = Boolean(result && result !== emptyResult && result.status !== "idle");
+  const outputVideoUrl = result?.outputs?.video_path || "";
+
+  function exportJson() {
+    if (hasResult) downloadTextFile(`${reportTaskId}.json`, JSON.stringify(result, null, 2), "application/json");
+  }
+
+  function exportCsv() {
+    if (hasResult) downloadTextFile(`${reportTaskId}.csv`, resultToCsv(result, reportTaskId), "text/csv;charset=utf-8");
+  }
+
+  function openOutputVideo() {
+    if (outputVideoUrl) window.open(apiUrl(outputVideoUrl), "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <div className="subweb-page reports-page">
+      <div className="page-intro subweb-intro">
+        <div>
+          <p className="eyebrow">04 / Reporting</p>
+          <h2>Turn a run into a shareable result.</h2>
+          <p className="lede">Export the active analytics result or review the latest jobs returned by the backend dashboard contract.</p>
+        </div>
+        <span className="meta-pill">{hasResult ? `Task ${String(reportTaskId).slice(0, 12)}` : "No active result"}</span>
+      </div>
+      <section className="report-card" aria-labelledby="report-actions-title">
+        <div>
+          <p className="eyebrow">Current result</p>
+          <h3 id="report-actions-title">Export analytics</h3>
+          <p className="hint-text">{hasResult ? "Use JSON for machine-readable output or CSV for spreadsheet analysis." : "Complete a batch run first to enable report exports."}</p>
+        </div>
+        <div className="button-row report-actions">
+          <button className="secondary-button" onClick={exportJson} disabled={!hasResult}><Icon name="code" /> JSON</button>
+          <button className="secondary-button" onClick={exportCsv} disabled={!hasResult}><Icon name="table" /> CSV</button>
+          <button className="primary-button" onClick={openOutputVideo} disabled={!outputVideoUrl}><Icon name="download" /> Open output video</button>
+          {!hasResult && <button className="secondary-button" onClick={() => onNavigate("sources")}><Icon name="arrow_right" /> Start a run</button>}
+        </div>
+      </section>
+      <DashboardInsights stats={stats} statsState="ready" />
     </div>
   );
 }
@@ -504,14 +699,14 @@ function SystemLogsPage({ logs, taskId, taskStatus, result }) {
   );
 }
 
-function SideNav({ taskStatus, result, activeView, onNavigate }) {
+function SideNav({ taskStatus, result, activeView, runtimeHealth, onNavigate }) {
   return (
     <aside className="side-nav">
       <div className="runtime-card">
-        <span className="status-dot" />
+        <span className={`status-dot health-${runtimeHealth}`} />
         <div>
           <h2>Core runtime</h2>
-          <p aria-live="polite">{taskStatus.status || "idle"}</p>
+          <p aria-live="polite">{runtimeHealth === "offline" ? "api offline" : taskStatus.status || "idle"}</p>
         </div>
       </div>
       <div className="side-caption">Workspace</div>
@@ -670,6 +865,7 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
   const pointer = useCanvasPointer(canvasRef);
 
   function handleDown(event) {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     const point = pointer(event);
     const index = vertices.findIndex((vertex) => distance(vertex, point) < handleHitRadius(preview));
     if (index >= 0) {
@@ -734,10 +930,11 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
           style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
           tabIndex="0"
           aria-label="ROI annotation canvas. Click to add a point and drag existing points to refine the polygon."
-          onMouseDown={handleDown}
-          onMouseMove={handleMove}
-          onMouseUp={handleUp}
-          onMouseLeave={handleUp}
+          onPointerDown={handleDown}
+          onPointerMove={handleMove}
+          onPointerUp={handleUp}
+          onPointerCancel={handleUp}
+          onPointerLeave={handleUp}
         />
       </section>
       <aside className="tool-panel">
@@ -786,6 +983,7 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
 
   function handleDown(event) {
     if (!activeLane) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     const point = clampPoint(pointer(event), crop.width, crop.height);
     const hit = findLanePoint(lanes, point, crop);
     if (hit) {
@@ -859,10 +1057,11 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
           style={{ aspectRatio: `${crop.width} / ${crop.height}` }}
           tabIndex="0"
           aria-label="Lane annotation canvas. Select a tool and click or drag on the crop to define lane geometry."
-          onMouseDown={handleDown}
-          onMouseMove={handleMove}
-          onMouseUp={handleUp}
-          onMouseLeave={handleUp}
+          onPointerDown={handleDown}
+          onPointerMove={handleMove}
+          onPointerUp={handleUp}
+          onPointerCancel={handleUp}
+          onPointerLeave={handleUp}
         />
       </section>
       <aside className="tool-panel lane-tools">
@@ -941,7 +1140,7 @@ function SettingsPanel({ settings, setSettings }) {
   );
 }
 
-function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
+function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog, onAlert }) {
   const isLiveView = view === "live";
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
   const [liveSession, setLiveSession] = useState(null);
@@ -981,20 +1180,23 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
           }
         } else if (statusPayload.status === "failed") {
           window.clearInterval(interval);
-          appendLog(`task failed: ${statusPayload.error_message || statusPayload.stage_detail || "unknown error"}`);
+          const message = statusPayload.error_message || statusPayload.stage_detail || "unknown error";
+          appendLog(`task failed: ${message}`);
+          onAlert({ tone: "error", title: "Batch task failed", message, action: "Review System Logs, then reset the workflow or retry the task." });
         }
       } catch (error) {
         if (cancelled) return;
         window.clearInterval(interval);
         setTaskStatus({ status: "error", progress: 0, stage: "poll_failed", stage_detail: error.message });
         appendLog(`task polling failed: ${error.message}`);
+        onAlert({ tone: "error", title: "Batch status unavailable", message: error.message, action: "Check the API connection and retry polling from the current workspace." });
       }
     }, 1500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, isLiveView, setResult, setTaskStatus, taskId]);
+  }, [appendLog, isLiveView, onAlert, setResult, setTaskStatus, taskId]);
 
   useEffect(() => {
     if (isLiveView && (liveSource?.resolved_url || liveSource?.source_url)) {
@@ -1013,6 +1215,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
         if (!cancelled) {
           setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
           appendLog(`live polling failed: ${error.message}`);
+          onAlert({ tone: "error", title: "Live session unavailable", message: error.message, action: "Stop or clear the session, then start it again when the API is healthy." });
           window.clearInterval(interval);
         }
       }
@@ -1021,18 +1224,23 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, isLiveView, liveSession?.session_id]);
+  }, [appendLog, isLiveView, liveSession?.session_id, onAlert]);
 
   async function startLiveSession() {
     if (!liveUrl.trim() || !submittedConfig) return;
     setLiveBusy(true);
     appendLog(`starting live source: ${liveUrl.trim()}`);
     try {
-      const session = await createLiveSession(liveUrl.trim(), submittedConfig);
+      const session = await createLiveSession(
+        liveUrl.trim(),
+        submittedConfig,
+        liveSource?.source_id || liveSource?.id,
+      );
       setLiveSession(session);
       appendLog(`live session: ${session?.session_id || "failed"}`);
     } catch (error) {
       appendLog(`live start failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session failed to start", message: error.message, action: "Confirm the stream URL and backend availability, then try Start Live again." });
     } finally {
       setLiveBusy(false);
     }
@@ -1046,6 +1254,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       setLiveSession((current) => current ? { ...current, status: "stopping" } : current);
     } catch (error) {
       appendLog(`live stop failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session could not stop", message: error.message, action: "Retry Stop or use System Logs to inspect the runtime state." });
     }
   }
 
@@ -1058,6 +1267,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       appendLog(`live session removed: ${sessionId.slice(0, 8)}`);
     } catch (error) {
       appendLog(`live removal failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session could not be cleared", message: error.message, action: "Retry Clear Session after the backend responds." });
     }
   }
 
@@ -1193,7 +1403,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
             value={liveUrl}
             onChange={(event) => setLiveUrl(event.target.value)}
             placeholder="Paste HLS/MJPEG/RTSP/direct video URL"
-            title="Resolved stream URL. For YouTube, use Resolve Source in step 1 first."
+            title="Source URL. YouTube playback URLs are resolved securely by the backend."
           />
           <button className="primary-button" disabled={!canStartLive} title={liveStartTitle} onClick={startLiveSession}>{liveBusy ? "Starting..." : "Start Live"}</button>
           <button className="secondary-button" disabled={!liveSession?.session_id || liveSession.status === "stopping"} title="Stop inference but keep the latest session metrics visible" onClick={stopLiveSession}>Stop</button>
@@ -1219,9 +1429,11 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
             <h3>Vehicle Events</h3>
           </div>
         </div>
-        {laneRows.map(([laneId, counts]) => (
+        {laneRows.length ? laneRows.map(([laneId, counts]) => (
           <LaneBars key={laneId} laneId={laneId} counts={counts} max={Math.max(1, visibleResult.total_count)} />
-        ))}
+        )) : (
+          <p className="hint-text chart-empty">Lane counts will appear after the first completed result.</p>
+        )}
       </section>
       <section className="debug-panel">
         <div className="panel-header compact">
@@ -1297,6 +1509,8 @@ function Icon({ name }) {
     schema: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="15" width="6" height="6" rx="1" /><path d="M9 6h3a3 3 0 0 1 3 3v6" /></>,
     terminal: <><path d="m5 7 4 4-4 4" /><path d="M12 17h7" /></>,
     code: <><path d="m8 9-3 3 3 3" /><path d="m16 9 3 3-3 3" /><path d="m14 5-4 14" /></>,
+    download: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>,
+    table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M9 4v16M15 4v16" /></>,
     error: <><circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16h.01" /></>,
     info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></>,
     close: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>,
@@ -1351,7 +1565,12 @@ async function uploadVideo(file) {
 
 async function fetchPreview(taskId) {
   const blob = await apiBlob(`/videos/${taskId}/preview`);
-  return loadImage(URL.createObjectURL(blob));
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    return await loadImage(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 async function resolveLiveSource(url) {
@@ -1394,10 +1613,15 @@ async function fetchResult(taskId) {
   return normalizeAnalyticsResult(await apiRequest(`/tasks/${taskId}/result`));
 }
 
-async function createLiveSession(sourceUrl, laneConfig) {
+async function createLiveSession(sourceUrl, laneConfig, sourceId = null) {
   return normalizeLiveSession(await apiRequest("/live/sessions", {
     method: "POST",
-    body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
+    body: JSON.stringify({
+      source_url: sourceUrl,
+      source_id: sourceId || undefined,
+      lane_config: laneConfig,
+      frame_skip: 2,
+    }),
   }));
 }
 
@@ -1702,6 +1926,38 @@ function createId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const random = Math.random().toString(16).slice(2);
   return `client-${Date.now().toString(16)}-${random}`;
+}
+
+function formatTaskDate(value) {
+  if (!value) return "Unknown time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function resultToCsv(result, taskId) {
+  const rows = [["task_id", "lane", "vehicle_type", "count"]];
+  Object.entries(result.counts || {}).forEach(([laneId, counts]) => {
+    CLASS_ALLOWED.forEach((vehicleType) => {
+      rows.push([taskId, laneId, vehicleType, Number(counts?.[vehicleType] || 0)]);
+    });
+  });
+  if (rows.length === 1) rows.push([taskId, "", "", Number(result.total_count || 0)]);
+  return rows.map((row) => row.map((value) => {
+    const cell = String(value ?? "");
+    return /[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+  }).join(",")).join("\n");
+}
+
+function downloadTextFile(filename, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function round(value) {

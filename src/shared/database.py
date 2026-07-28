@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -183,7 +184,10 @@ class LocalJsonDatabase:
     def save(self):
         payload = {"_counter": self._counter, **self._data}
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+        serialized = json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2)
+        temporary_path = self.path.with_name(f".{self.path.name}.tmp")
+        temporary_path.write_text(serialized, encoding="utf-8")
+        os.replace(temporary_path, self.path)
 
 
 class _AsyncThreadLock:
@@ -275,6 +279,7 @@ async def connect_to_mongo():
         db_instance.client = client
         db_instance.db = client[settings.MONGODB_DB_NAME]
         db_instance.using_local_fallback = False
+        await _ensure_mongo_indexes(db_instance.db)
         logger.info("Connected to MongoDB successfully!")
     except (ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
         client.close()
@@ -290,12 +295,34 @@ async def connect_to_mongo():
         )
 
 
+async def _ensure_mongo_indexes(database) -> None:
+    """Create the query indexes used by task polling and result aggregation."""
+    indexes = (
+        (database.tasks, "task_id", {"unique": True, "name": "uq_tasks_task_id"}),
+        (database.tasks, "video_id", {"name": "ix_tasks_video_id"}),
+        (database.tasks, "status", {"name": "ix_tasks_status"}),
+        (database.tasks, "expires_at", {"name": "ix_tasks_expires_at"}),
+        (database.lane_configs, "video_id", {"unique": True, "name": "uq_lane_configs_video_id"}),
+        (database.lane_configs, "task_id", {"name": "ix_lane_configs_task_id"}),
+        (database.traffic_statistics, "task_id", {"name": "ix_traffic_statistics_task_id"}),
+    )
+    for collection, field, options in indexes:
+        try:
+            await collection.create_index(field, **options)
+        except Exception:
+            # Index creation must not hide an otherwise healthy API startup;
+            # MongoDB logs the concrete reason and the next deploy can retry.
+            logger.exception("Could not create MongoDB index %s on %s", options.get("name"), collection.name)
+
+
 async def close_mongo_connection():
     logger.info("Closing MongoDB connection...")
     if db_instance.client:
         db_instance.client.close()
         logger.info("MongoDB connection closed.")
     db_instance.client = None
+    db_instance.db = None
+    db_instance.using_local_fallback = False
 
 
 def get_database():

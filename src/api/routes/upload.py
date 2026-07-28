@@ -114,7 +114,11 @@ async def upload_chunk(
 
 
 @router.post("/video/chunk/{upload_id}/complete")
-async def complete_chunked_upload(upload_id: str, db=Depends(get_database)):
+async def complete_chunked_upload(
+    upload_id: str,
+    request: Request,
+    db=Depends(get_database),
+):
     _validate_upload_id(upload_id)
     upload_dir = CHUNK_DIR / upload_id
     if not upload_dir.exists():
