@@ -22,8 +22,11 @@ worker = [
     "urllib3",
 ]
 api = [
-    "fastapi",
-    "uvicorn",
+    # Keep the router/lifespan behavior stable across deployments. FastAPI
+    # 0.116+ currently pulls a new Starlette routing implementation that is
+    # not compatible with this project's nested APIRouter layout.
+    "fastapi>=0.115.6,<0.116",
+    "uvicorn>=0.32,<0.34",
     "motor",
     "apscheduler",
     "boto3",
@@ -46,7 +49,7 @@ gpu = [
 dev = [
     "pytest",
     "psutil",
-    "httpx>=0.27",
+    "httpx>=0.27,<0.29",
 ]
 
 [tool.setuptools.packages.find]

@@ -263,31 +263,37 @@ async def task_progress_callback(
         update_fields["multi_lane_track_count"] = payload.multi_lane_track_count
         update_fields["multi_lane_tracks"] = payload.multi_lane_tracks
 
-        # Insert stats to DB if provided
-        if payload.statistics:
-            # Clear previous stats for this task if any
-            await db.traffic_statistics.delete_many({"task_id": task_id})
-            
-            # Prepare statistic records
-            stat_docs = []
-            for stat in payload.statistics:
-                stat_docs.append({
-                    "task_id": task_id,
-                    "lane_id": stat.lane_id,
-                    "vehicle_type": stat.vehicle_type,
-                    "count": stat.count,
-                    "direction": stat.direction,
-                    "created_at": datetime.utcnow()
-                })
-            
-            if stat_docs:
-                await db.traffic_statistics.insert_many(stat_docs)
-
-    # Perform task document update
-    await db.tasks.update_one(
-        {"task_id": task_id},
+    # Keep the read/validate/update sequence safe against two workers racing
+    # to report progress. MongoDB and the local fallback both support these
+    # comparison operators.
+    update_query = {"task_id": task_id, "status": current_status}
+    if payload.status != "failed":
+        update_query["progress"] = {"$lte": current_progress if payload.progress < current_progress else payload.progress}
+    update_result = await db.tasks.update_one(
+        update_query,
         {"$set": update_fields}
     )
+    if getattr(update_result, "matched_count", None) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task changed while progress was being reported; retry the callback.",
+        )
+
+    if payload.status == "completed" and payload.statistics:
+        await db.traffic_statistics.delete_many({"task_id": task_id})
+        stat_docs = [
+            {
+                "task_id": task_id,
+                "lane_id": stat.lane_id,
+                "vehicle_type": stat.vehicle_type,
+                "count": stat.count,
+                "direction": stat.direction,
+                "created_at": datetime.utcnow(),
+            }
+            for stat in payload.statistics
+        ]
+        if stat_docs:
+            await db.traffic_statistics.insert_many(stat_docs)
 
     return {"status": "success", "message": "Task progress updated successfully."}
 
