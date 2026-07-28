@@ -5,12 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from pymongo.errors import OperationFailure
 from starlette.requests import Request
 
 from api.routes.tasks import task_progress_callback
 from api.schemas.lane import LaneConfigRequest
 from api.schemas.task import TaskProgressCallback
-from shared.database import LocalJsonDatabase
+from shared.database import LocalJsonDatabase, _ensure_mongo_indexes
 
 
 def _lane_config() -> dict:
@@ -83,3 +84,38 @@ def test_progress_callback_rejects_regression() -> None:
 
     assert error.value.status_code == 409
     db.tasks.update_one.assert_not_awaited()
+
+
+def test_mongo_index_migration_accepts_legacy_equivalent_index() -> None:
+    import asyncio
+
+    class Collection:
+        name = "tasks"
+
+        def __init__(self, field: str):
+            self.field = field
+            self.create_calls = 0
+
+        async def create_index(self, field: str, **options):
+            self.create_calls += 1
+            if field == self.field:
+                raise OperationFailure("IndexOptionsConflict", code=85)
+
+        async def index_information(self):
+            return {f"{self.field}_1": {"key": [(self.field, 1)], "unique": self.field == "task_id"}}
+
+    class Database:
+        tasks = type("Tasks", (), {})()
+        lane_configs = type("LaneConfigs", (), {})()
+        traffic_statistics = type("TrafficStatistics", (), {})()
+
+    database = Database()
+    database.tasks = Collection("task_id")
+    database.lane_configs = Collection("video_id")
+    database.traffic_statistics = Collection("task_id")
+
+    asyncio.run(_ensure_mongo_indexes(database))
+
+    assert database.tasks.create_calls == 4
+    assert database.lane_configs.create_calls == 2
+    assert database.traffic_statistics.create_calls == 1
