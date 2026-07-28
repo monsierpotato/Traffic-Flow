@@ -2,7 +2,6 @@
 
 import logging
 import os
-import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -11,30 +10,13 @@ from fastapi.responses import FileResponse
 
 from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
-from api.services.upload_service import create_uploaded_video_task_from_path
+from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.task import TaskCreateRequest
 from api.schemas.lane import LaneConfigRequest
 from api.routes.tasks import process_task, get_task_status, get_task_result
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-async def _save_upload_to_temp(file: UploadFile) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "video.mp4").suffix or ".mp4")
-    try:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            temp_file.write(chunk)
-        temp_file.close()
-        return temp_file.name
-    except Exception:
-        temp_file.close()
-        if os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
-        raise
 
 
 @router.post("/videos")
@@ -44,7 +26,7 @@ async def compat_upload(request: Request, file: UploadFile = File(...)):
     if db is None:
         raise HTTPException(503, "Database not connected")
 
-    temp_path = await _save_upload_to_temp(file)
+    temp_path = await save_upload_to_temp(file)
     try:
         uploaded = await create_uploaded_video_task_from_path(
             request=request,
