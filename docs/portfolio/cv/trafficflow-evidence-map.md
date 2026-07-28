@@ -5,8 +5,8 @@
 | Claim | Evidence |
 |---|---|
 | Five-member team project | `docs/portfolio/project-scope-and-ownership.md` |
-| Personal ownership is AI/computer-vision pipeline, not full-stack product | `docs/portfolio/project-scope-and-ownership.md` |
-| Live runtime contribution is analysis/validation lead with shared platform integration | `docs/portfolio/project-scope-and-ownership.md`, `docs/reports/phase-08-live-runtime.md` |
+| Individual contribution is scoped to the AI/computer-vision pipeline, not the full-stack product | `docs/portfolio/project-scope-and-ownership.md` |
+| Live runtime contribution is AI-runtime analysis/validation with shared platform integration | `docs/portfolio/project-scope-and-ownership.md`, `docs/reports/phase-08-live-runtime.md` |
 
 ## Metrics
 
@@ -34,6 +34,6 @@
 |---|---|
 | Motorcycle AP/recall/counting accuracy on UA-DETRAC | UA-DETRAC labels in this repo have no motorcycle-compatible class. |
 | Live count accuracy | The YouTube/HLS source has no GT. |
-| Full-stack solo ownership | Team project; personal ownership is AI/computer-vision pipeline. |
+| Full-stack solo ownership | Team project; individual contribution is scoped to AI/computer-vision pipeline work. |
 | Production re-tracker as best measured tracker | Direct ByteTrack performed better in held-out end-to-end metrics. |
 | ROI accuracy improvement | Full-frame vs crop-ROI AP/Event F1/WAPE is blocked until crop ROI GT exists for the benchmark sequences. |

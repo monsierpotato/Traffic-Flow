@@ -8,13 +8,13 @@ PASS WITH GITHUB RELEASE CONDITIONS.
 
 ## Mục tiêu
 
-Check consistency, reproducibility, ownership wording, and recruiter readiness for the TrafficFlow portfolio package.
+Check consistency, reproducibility, contribution wording, and public readability for the TrafficFlow documentation package.
 
 ## Phạm vi đã hoàn thành
 
 - Created final release checklist.
 - Created final portfolio report.
-- Reviewed scientific validity, engineering readiness, ownership wording, and recruiter readiness against the plan.
+- Reviewed scientific validity, engineering readiness, contribution wording, and public readability against the plan.
 - Refreshed final gate after Phase 09 partial-pass ablation/error-analysis.
 
 ## Public files created
@@ -70,7 +70,7 @@ git diff --check
 
 ## Risks
 
-- Publishing without demo media weakens recruiter readability.
+- Publishing without demo media weakens first-read clarity.
 - Publishing with the ROI-ablation blocker is acceptable if the README limitations remain visible.
 
 ## Nội dung cần người dùng review

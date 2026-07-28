@@ -4,7 +4,7 @@ Video-based traffic analysis for detecting, tracking, and counting vehicles by l
 
 This is a five-person project that runs natively with Node.js and Python on the local machine. Docker/Compose is not part of the project runtime.
 
-**Reviewer path:** start with [docs/portfolio/recruiter-overview.md](docs/portfolio/recruiter-overview.md), then use [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md), [docs/portfolio/benchmark-methodology.md](docs/portfolio/benchmark-methodology.md), and [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) for technical screening.
+**Start here:** [docs/portfolio/project-overview.md](docs/portfolio/project-overview.md) gives a short team project summary. Use [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md), [docs/portfolio/benchmark-methodology.md](docs/portfolio/benchmark-methodology.md), and [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) for deeper technical context.
 
 ---
 
@@ -162,7 +162,7 @@ Initial system (baseline)
 
 ## Team & Roles
 
-| Member | Role | Primary ownership |
+| Member | Role | Primary responsibility |
 | --- | --- | --- |
 | Quang Nhật | AI Pipeline Engineer | Runtime engine, YOLO/ByteTrack inference, lane geometry, tracking, counting, benchmark, and evaluation |
 | Công Phúc | Frontend Engineer | Upload UI, canvas lane drawing, coordinate scaling, progress, and result dashboard |
@@ -214,12 +214,12 @@ The repository is configured so Vercel builds only `frontend/`; the Python API a
 
 ## Documentation
 
-The docs folder is intentionally split into a short reviewer path and deeper engineering references. Most readers should not need to read every file.
+The docs folder is intentionally split into a short reading path and deeper engineering references. Most readers should not need to read every file.
 
 | Start here | Contents |
 | --- | --- |
-| [docs/portfolio/recruiter-overview.md](docs/portfolio/recruiter-overview.md) | One-minute project summary, scoped ownership, and key measured results |
-| [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) | Team split and personal AI/CV ownership boundaries |
+| [docs/portfolio/project-overview.md](docs/portfolio/project-overview.md) | One-minute team project summary, contribution areas, and key measured results |
+| [docs/portfolio/project-scope-and-ownership.md](docs/portfolio/project-scope-and-ownership.md) | Team split and AI/CV contribution boundaries |
 | [docs/portfolio/ai-pipeline.md](docs/portfolio/ai-pipeline.md) | Detector, tracker, lane filtering, and counting design |
 | [docs/portfolio/benchmark-methodology.md](docs/portfolio/benchmark-methodology.md) | Split policy, metrics, and anti-leakage rules |
 | [docs/reports/](docs/reports/) | Public benchmark phase summaries behind the README metrics |

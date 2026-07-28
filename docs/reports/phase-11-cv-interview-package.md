@@ -10,7 +10,7 @@ Turn benchmark evidence into concise CV bullets, interview answers, and a metric
 
 ## Phạm vi đã hoàn thành
 
-- Created a four-bullet CV version and a shorter recruiter version.
+- Created a four-bullet CV version and a shorter public version.
 - Created interview answers for pipeline, ROI coordinate spaces, lane semantics, tracking, derived GT, model selection, runtime profiling, live scheduling, failure cases, limitations, and AI-assisted development.
 - Created evidence map for each metric used in README/CV wording.
 
