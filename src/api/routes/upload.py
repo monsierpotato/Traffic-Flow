@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Request, status, Form
-from shared.database import get_database
+from api.dependencies import require_database
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.upload import UploadResponse
@@ -100,7 +100,7 @@ async def upload_chunk(
 async def complete_chunked_upload(
     upload_id: str,
     request: Request,
-    db=Depends(get_database),
+    db=Depends(require_database),
 ):
     _validate_upload_id(upload_id)
     upload_dir = CHUNK_DIR / upload_id
@@ -172,7 +172,7 @@ async def complete_chunked_upload(
 async def upload_video(
     request: Request,
     file: UploadFile = Depends(validate_video_file),
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Uploads video file, extracts first frame, saves both to Cloudflare R2,
     and initializes a task document in MongoDB.

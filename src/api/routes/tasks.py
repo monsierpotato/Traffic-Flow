@@ -3,7 +3,7 @@ import os
 import logging
 from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from shared.database import get_database
+from api.dependencies import require_database
 from shared.config import settings
 from worker.celery_app import celery_app
 from api.schemas.task import (
@@ -54,7 +54,7 @@ def _public_lane_config(lane_config: dict | None) -> dict | None:
 async def process_task(
     payload: TaskCreateRequest,
     request: Request,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Validate the configured task and enqueue it in Celery."""
     task = await db.tasks.find_one({"video_id": payload.video_id})
@@ -193,7 +193,7 @@ async def process_task(
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(
     task_id: str,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Retrieves the current status and progress of a task."""
     task = await find_task(db, task_id)
@@ -219,7 +219,7 @@ async def task_progress_callback(
     task_id: str,
     payload: TaskProgressCallback,
     request: Request,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Endpoint for Worker to report progress updates, failures, or completion."""
     if settings.CALLBACK_TOKEN:
@@ -303,7 +303,7 @@ async def task_progress_callback(
 @router.get("/result/{task_id}", response_model=TaskResultResponse)
 async def get_task_result(
     task_id: str,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Retrieves final video result URL, log file URL, and aggregated statistics."""
     task = await find_task(db, task_id)
