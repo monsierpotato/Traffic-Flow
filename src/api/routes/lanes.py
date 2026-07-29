@@ -1,6 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from shared.database import get_database
+from api.dependencies import require_database
 from api.schemas.lane import LaneConfigRequest, LaneConfigResponse
 
 router = APIRouter()
@@ -8,7 +8,7 @@ router = APIRouter()
 @router.post("/config", response_model=LaneConfigResponse, status_code=status.HTTP_200_OK)
 async def configure_lanes(
     payload: LaneConfigRequest,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Saves ROI and Lane configurations for a video."""
     # 1. Verify that the video/task document exists
@@ -73,7 +73,7 @@ async def configure_lanes(
 @router.get("/config/{video_id}", response_model=LaneConfigRequest, status_code=status.HTTP_200_OK)
 async def get_lane_config(
     video_id: str,
-    db = Depends(get_database)
+    db = Depends(require_database)
 ):
     """Retrieves the Lane configurations for a video (accepts video_id or task_id)."""
     lane_config = await db.lane_configs.find_one({
