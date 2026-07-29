@@ -6,7 +6,7 @@ TrafficFlow counts vehicles by lane from uploaded videos and live traffic stream
 
 ## Team Size And Ownership
 
-This was a five-member team project. My scope was the AI/computer-vision pipeline and runtime validation: ROI/crop semantics, detection integration, lane/class filtering, tracking/counting evaluation, derived GT, and benchmark reporting. I should not describe myself as owning the full frontend/backend/storage product.
+This was a five-member team project. The team built the frontend annotation flow, backend APIs, worker/runtime path, storage integration, and AI counting pipeline together. My individual contribution was scoped to AI/computer-vision pipeline and runtime validation work: ROI/crop semantics, detection integration, lane/class filtering, tracking/counting evaluation, derived GT, and benchmark reporting. I should not describe myself as owning the full frontend/backend/storage product.
 
 ## Input-To-Count Pipeline
 
@@ -44,7 +44,7 @@ The current production re-tracker had more ID switches and worse counting WAPE o
 
 ## Derived Ground Truth
 
-UA-DETRAC provides object tracks, not lane-crossing events. I generated derived counting GT by combining frozen UA-DETRAC tracks with manual source-frame lane geometry and bottom-center crossing logic. This was audited with sampled event frames/contact sheets before scoring.
+UA-DETRAC provides object tracks, not lane-crossing events. The benchmark generated derived counting GT by combining frozen UA-DETRAC tracks with manual source-frame lane geometry and bottom-center crossing logic. This was audited with sampled event frames/contact sheets before scoring.
 
 ## Sequence Split
 
@@ -59,7 +59,7 @@ Held-out test is not used for tuning.
 
 ## Model Selection
 
-The detector comparison was run on development data in Docker GPU. `yolov8m.pt` was selected because it gave the best AP50/AP50-95/recall trade-off among the tested candidates. Held-out detection AP50 was `0.582020` with recall `0.679091`.
+The detector comparison was run on development data in Docker GPU. The benchmark selected `yolov8m.pt` because it gave the best AP50/AP50-95/recall trade-off among the tested candidates. Held-out detection AP50 was `0.582020` with recall `0.679091`.
 
 ## Runtime Profiling
 
@@ -96,7 +96,7 @@ Known issues:
 
 If asked directly:
 
-> AI was used to support error analysis, option discussion, review, and to accelerate parts of implementation. I was responsible for defining the problem, choosing the solution, checking source code, writing/running tests, running benchmarks, integrating the changes, and keeping only changes I can explain.
+> AI was used to support error analysis, option discussion, review, and to accelerate parts of implementation. The team remained responsible for the system design, implementation decisions, source review, tests, benchmarks, and accepting only changes the team could explain.
 
 Do not include this in the CV unless explicitly asked.
 

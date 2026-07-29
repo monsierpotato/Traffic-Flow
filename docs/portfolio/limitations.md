@@ -24,4 +24,4 @@
 
 ## Ownership Limitations
 
-This project should not be presented as solo full-stack ownership. The correct framing is AI/computer-vision pipeline ownership within a five-member team, with live-platform integration as shared work.
+This project should not be presented as solo full-stack ownership. The correct public framing is a five-member team project, with individual AI/computer-vision pipeline contributions and shared live-platform integration work.

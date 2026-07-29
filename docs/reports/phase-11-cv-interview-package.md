@@ -10,7 +10,7 @@ Turn benchmark evidence into concise CV bullets, interview answers, and a metric
 
 ## Phạm vi đã hoàn thành
 
-- Created a four-bullet CV version and a shorter recruiter version.
+- Created a four-bullet CV version and a shorter public version.
 - Created interview answers for pipeline, ROI coordinate spaces, lane semantics, tracking, derived GT, model selection, runtime profiling, live scheduling, failure cases, limitations, and AI-assisted development.
 - Created evidence map for each metric used in README/CV wording.
 
@@ -43,10 +43,10 @@ Turn benchmark evidence into concise CV bullets, interview answers, and a metric
 
 | Metric | Value | Run ID | Evidence |
 |---|---:|---|---|
-| Held-out detector AP50 / recall | 0.582020 / 0.679091 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `benchmark/reports/detection_summary.csv` |
-| Held-out ByteTrack Event F1 / WAPE | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `benchmark/reports/end_to_end_summary.csv` |
-| Uploaded runtime FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `benchmark/reports/batch_runtime_summary.csv` |
-| Live soak FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `benchmark/reports/live_runtime_report.md` |
+| Held-out detector AP50 / recall | 0.582020 / 0.679091 | `phase04-heldout-yolov8m-docker-gpu-20260718` | `docs/reports/phase-04-detection-benchmark.md` |
+| Held-out ByteTrack Event F1 / WAPE | 0.942238 / 0.050360 | `e2e-heldout-bytetrack-vs-production-full-docker-gpu-20260718` | `docs/reports/end-to-end-bytetrack-production-comparison.md` |
+| Uploaded runtime FPS / RTF | 75.829 / 3.033x | `phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2` | `docs/reports/phase-07-upload-runtime.md` |
+| Live soak FPS / frame age p95 / drops | 14.895 / 0.9 ms / 0 | `phase08-live-hls-30min-20260718` | `docs/reports/phase-08-live-runtime.md` |
 
 ## Quyết định kỹ thuật
 

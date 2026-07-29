@@ -24,13 +24,12 @@
 - UA-DETRAC local benchmark videos are 960x540. No benchmark-safe 1080p upload input or 3-5 minute/10+ minute source video was present in the frozen split, so this run reports available short/extended-short inputs only.
 - `bytetrack` means Ultralytics YOLO `model.track(..., tracker="bytetrack.yaml")` plus lane filter/counting. `trafficflow_production` adds TrafficFlow `LocalTracker` after ByteTrack detections, matching the current upload path candidate measured earlier.
 
-## Artifacts
+## Public Evidence
 
-- `benchmark/reports/batch_runtime_summary.csv`
-- `benchmark/reports/stage_latency.csv`
-- `benchmark/reports/resource_usage.csv`
-- Run manifests: `benchmark/predictions/runtime/phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2/manifests/`
-- Overlay videos: `benchmark/predictions/runtime/phase07-upload-runtime-bytetrack-production-docker-gpu-20260718-v2/overlays/`
+- `benchmark/batch_runtime_eval.py`
+- `docs/reports/phase-07-upload-runtime.md`
+
+Generated local artifacts for this run included runtime CSVs, run manifests, resource samples, and overlay videos under `benchmark/`.
 
 ## Gate
 

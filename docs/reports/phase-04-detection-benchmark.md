@@ -6,16 +6,13 @@ PASS, STOP GATE reached on 2026-07-18.
 
 Phase 04 ran a detector-only benchmark on the frozen UA-DETRAC v1 split. Development and held-out results are separated. The held-out split was used once after selecting the model on development.
 
-## Outputs
+## Public Evidence
 
 - `benchmark/detection_eval.py`
-- `benchmark/predictions/detection/phase04-dev-model-comparison-docker-gpu-20260718/`
-- `benchmark/predictions/detection/phase04-heldout-yolov8m-docker-gpu-20260718/`
-- `benchmark/reports/detection_summary.csv`
-- `benchmark/reports/detection_report.md`
-- `benchmark/reports/model_selection.md`
 - `docs/reports/phase-04-detection-benchmark.md`
 - `docs/wiki/ai-workflow/phase-04-detection-benchmark.md`
+
+Generated local artifacts for this run included detector predictions, `detection_summary.csv`, `detection_report.md`, and `model_selection.md` under `benchmark/`.
 
 ## Environment
 

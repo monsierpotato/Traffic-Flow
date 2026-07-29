@@ -6,17 +6,14 @@ PASS, STOP GATE reached on 2026-07-18.
 
 Phase 06 added a counting-specific evaluator and ran an oracle counting benchmark on the frozen UA-DETRAC v1 split with manual geometry. Development and held-out metrics are reported separately.
 
-## Outputs
+## Public Evidence
 
 - `benchmark/counting_eval.py`
 - `tests/test_counting_eval.py`
-- `benchmark/predictions/counting/phase06-oracle-counting-manual-geometry-20260718/`
-- `benchmark/reports/counting_report.md`
-- `benchmark/reports/counting_summary.csv`
-- `benchmark/reports/counting_event_matches.csv`
-- `benchmark/reports/counting_errors.csv`
 - `docs/reports/phase-06-counting-benchmark.md`
 - `docs/wiki/ai-workflow/phase-06-counting-benchmark.md`
+
+Generated local artifacts for this run included oracle counting predictions, event matches, errors, and summary CSVs under `benchmark/`.
 
 ## Method
 
