@@ -1,4 +1,5 @@
 import copy
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import OperationFailure, PyMongoError, ServerSelectionTimeoutError
 
 from shared.config import settings
+from shared.safe_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -266,22 +268,27 @@ def _restore_dates(value: Any, key: Optional[str] = None):
 
 
 async def connect_to_mongo():
-    logger.info("Connecting to MongoDB Atlas...")
+    logger.info("Connecting to configured MongoDB...")
+    ping_timeout_seconds = max(
+        settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+        settings.MONGODB_CONNECT_TIMEOUT_MS,
+    ) / 1000 + 0.5
     client_options = {
         "serverSelectionTimeoutMS": settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
         "connectTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+        "socketTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
     }
     if settings.MONGODB_TLS or settings.MONGODB_URI.startswith("mongodb+srv://"):
         client_options["tlsCAFile"] = certifi.where()
     client = AsyncIOMotorClient(settings.MONGODB_URI, **client_options)
     try:
-        await client.admin.command("ping")
+        await asyncio.wait_for(client.admin.command("ping"), timeout=ping_timeout_seconds)
         db_instance.client = client
         db_instance.db = client[settings.MONGODB_DB_NAME]
         db_instance.using_local_fallback = False
         await _ensure_mongo_indexes(db_instance.db)
         logger.info("Connected to MongoDB successfully!")
-    except (ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
+    except (asyncio.TimeoutError, ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
         client.close()
         if not settings.MONGODB_LOCAL_FALLBACK:
             raise
@@ -290,7 +297,7 @@ async def connect_to_mongo():
         db_instance.using_local_fallback = True
         logger.warning(
             "MongoDB unavailable (%s). Falling back to local JSON DB at %s",
-            exc,
+            safe_error_message(exc),
             settings.LOCAL_DB_PATH,
         )
 

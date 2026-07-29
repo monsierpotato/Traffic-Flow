@@ -109,6 +109,8 @@ def _get_video_meta(path: str) -> VideoMeta:
         h = h or fallback_h
         fps = fps or fallback_fps
         nframes = nframes or fallback_frames
+    if w <= 0 or h <= 0:
+        raise ValueError("Could not read valid video dimensions")
     fps = fps or 30.0
     duration = duration or (nframes / fps if fps > 0 else 0.0)
     return VideoMeta(
@@ -135,6 +137,7 @@ def normalize_video_path(input_path: str | Path) -> Tuple[str, VideoMeta, VideoM
     t0 = time.perf_counter()
     input_path = str(input_path)
     temp_out_name = None
+    orig_meta = None
 
     try:
         orig_meta = _get_video_meta(input_path)
@@ -190,11 +193,13 @@ def normalize_video_path(input_path: str | Path) -> Tuple[str, VideoMeta, VideoM
         )
         return temp_out_name, orig_meta, working_meta, transcode_ms, True
 
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.error(f"FFmpeg transcode failed: {e}")
         if getattr(e, "stderr", None):
             logger.error("FFmpeg stderr: %s", e.stderr)
         # Fallback: return original
+        if orig_meta is None:
+            raise
         transcode_ms = (time.perf_counter() - t0) * 1000.0
         if temp_out_name and os.path.exists(temp_out_name):
             try:
@@ -324,8 +329,12 @@ def crop_video(video_bytes: bytes, bbox: tuple) -> bytes:
         raise e
     finally:
         if os.path.exists(temp_in.name):
-            try: os.unlink(temp_in.name)
-            except: pass
+            try:
+                os.unlink(temp_in.name)
+            except OSError:
+                pass
         if os.path.exists(temp_out_name):
-            try: os.unlink(temp_out_name)
-            except: pass
+            try:
+                os.unlink(temp_out_name)
+            except OSError:
+                pass

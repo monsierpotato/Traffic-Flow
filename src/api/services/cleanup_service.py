@@ -1,7 +1,10 @@
 import logging
 from datetime import datetime
+from pathlib import Path
 from shared.database import db_instance
 from shared.r2_client import r2_client
+from shared.safe_errors import safe_error_message
+from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +15,7 @@ def _delete_key(key: str, label: str):
     try:
         r2_client.delete_file(key)
     except Exception as e:
-        logger.warning(f"Could not delete {label} {key}: {str(e)}")
+        logger.warning("Could not delete %s %s: %s", label, key, safe_error_message(e))
 
 async def run_data_cleanup():
     """Finds expired tasks, deletes associated video/preview files from Cloudflare R2,
@@ -56,6 +59,15 @@ async def run_data_cleanup():
         }
         for key in keys:
             _delete_key(key, "task asset")
+
+        try:
+            (Path(settings.STORAGE_DIR) / "previews" / f"{video_id}.jpg").unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Could not delete local preview for video %s: %s",
+                video_id,
+                safe_error_message(exc),
+            )
 
         # 3. Delete result video and events if task was completed
         if task.get("result_video_url"):

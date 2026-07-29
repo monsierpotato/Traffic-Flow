@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import HTTPException, Request, UploadFile, status
+from fastapi import HTTPException, UploadFile, status
 
 from api.services.video_service import extract_first_frame_path, normalize_video_path, VideoMeta
 from shared.config import settings
@@ -58,12 +58,10 @@ def _color_meta(meta: VideoMeta) -> dict:
     }
 
 
-def _save_local_preview(video_id: str, preview_bytes: bytes, request: Request) -> str:
+def _save_local_preview(video_id: str, preview_bytes: bytes) -> None:
     local_preview_dir = Path(settings.STORAGE_DIR) / "previews"
     local_preview_dir.mkdir(parents=True, exist_ok=True)
     (local_preview_dir / f"{video_id}.jpg").write_bytes(preview_bytes)
-    base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/static/previews/{video_id}.jpg"
 
 
 def _copy_upload_file(source, destination: str) -> None:
@@ -110,6 +108,10 @@ async def _unlink_path(path: str | Path | None) -> None:
             pass
         except OSError:
             logger.warning("Could not delete temp path: %s", path)
+
+
+async def _delete_local_preview(video_id: str) -> None:
+    await _unlink_path(Path(settings.STORAGE_DIR) / "previews" / f"{video_id}.jpg")
 
 
 def _task_document(
@@ -170,7 +172,6 @@ def _task_document(
 
 async def create_uploaded_video_task_from_path(
     *,
-    request: Request,
     db,
     video_path: str | Path,
     content_type: str = "video/mp4",
@@ -221,13 +222,17 @@ async def create_uploaded_video_task_from_path(
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Could not extract preview frame from video: {exc}",
+                detail="Could not extract a preview frame from the uploaded video.",
             ) from exc
 
         preview_key = f"previews/{video_id}.jpg"
-        await _run_blocking(r2_client.upload_file, preview_bytes, preview_key, "image/jpeg")
+        preview_url = await _run_blocking(
+            r2_client.upload_file, preview_bytes, preview_key, "image/jpeg"
+        )
         uploaded_keys.append(preview_key)
-        preview_url = await _run_blocking(_save_local_preview, video_id, preview_bytes, request)
+        # Keep a local copy for the compatibility route, but return the
+        # storage URL so production replicas do not depend on local disk.
+        await _run_blocking(_save_local_preview, video_id, preview_bytes)
         preview_ms = (time.perf_counter() - preview_started) * 1000.0
 
         task_doc = _task_document(
@@ -269,34 +274,16 @@ async def create_uploaded_video_task_from_path(
         )
     except HTTPException:
         await _delete_uploaded_keys(uploaded_keys)
+        await _delete_local_preview(video_id)
         raise
     except Exception as exc:
         await _delete_uploaded_keys(uploaded_keys)
+        await _delete_local_preview(video_id)
+        logger.exception("Upload processing failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while uploading: {exc}",
+            detail="An error occurred while uploading the video.",
         ) from exc
     finally:
         if owns_working_path and working_path and os.path.exists(working_path):
             await _unlink_path(working_path)
-
-
-async def create_uploaded_video_task(
-    *,
-    request: Request,
-    db,
-    video_bytes: bytes,
-    content_type: str = "video/mp4",
-) -> UploadedVideo:
-    fd, temp_path = tempfile.mkstemp(suffix=".mp4")
-    os.close(fd)
-    try:
-        await _run_blocking(Path(temp_path).write_bytes, video_bytes)
-        return await create_uploaded_video_task_from_path(
-            request=request,
-            db=db,
-            video_path=temp_path,
-            content_type=content_type,
-        )
-    finally:
-        await _unlink_path(temp_path)

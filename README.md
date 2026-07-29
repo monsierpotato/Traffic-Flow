@@ -198,7 +198,7 @@ Open **http://127.0.0.1:8080** in a browser. The API runs at **http://127.0.0.1:
 
 `npm run dev` starts the API and Vite frontend. The Celery worker starts only when native Redis is listening on `127.0.0.1:6379`; otherwise, the UI/API stack still runs but reports the worker as `BLOCKED`.
 
-Minimum requirements: Node.js 20+, Python 3.10+, FFmpeg, and FFprobe. MongoDB is optional locally because a JSON fallback is available; Redis and model weights are required for real batch inference.
+Minimum requirements: Node.js 20+, Python 3.10+, FFmpeg, and FFprobe. MongoDB is optional locally because a JSON fallback is available; Redis is required for batch processing. Local model weights plus `torch`/`ultralytics` are optional when `AI_SERVING_URL` is configured, because the worker falls back to remote inference.
 
 Detailed native setup: **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**.
 

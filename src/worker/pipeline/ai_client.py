@@ -46,7 +46,7 @@ class InferenceClient:
 
     def create_session(self) -> str:
         url = f"{self.base_url}/v1/session"
-        logger.info(f"Creating AI session: {url}")
+        logger.info("Creating AI inference session")
         resp = self._session.post(url, timeout=max(self.request_timeout, 60))
         resp.raise_for_status()
         self._session_id = resp.json()["session_id"]

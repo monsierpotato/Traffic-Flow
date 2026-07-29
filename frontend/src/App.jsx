@@ -64,6 +64,7 @@ function App() {
   const [stepIndex, setStepIndex] = useState(0);
   const [activeView, setActiveView] = useState("dashboard");
   const [taskId, setTaskId] = useState("");
+  const [videoId, setVideoId] = useState("");
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [sourceMode, setSourceMode] = useState("video");
@@ -111,6 +112,7 @@ function App() {
     setStepIndex(0);
     setActiveView("sources");
     setTaskId("");
+    setVideoId("");
     setVideoFile(null);
     setVideoUrl("");
     setSourceMode("video");
@@ -148,10 +150,10 @@ function App() {
     let cancelled = false;
     const checkRuntimeHealth = async () => {
       try {
-        await apiRequest("/health");
+        await apiRequest("/ready");
         if (!cancelled) setRuntimeHealth("online");
-      } catch {
-        if (!cancelled) setRuntimeHealth("offline");
+      } catch (error) {
+        if (!cancelled) setRuntimeHealth(error.status === 503 ? "degraded" : "offline");
       }
     };
     checkRuntimeHealth();
@@ -183,6 +185,7 @@ function App() {
         const status = await pollTask(saved.taskId);
         if (cancelled) return;
         setTaskId(saved.taskId);
+        setVideoId(saved.videoId || saved.taskId);
         setTaskStatus(status);
         if (["completed", "succeeded"].includes(status.status)) {
           const nextResult = await fetchResult(saved.taskId);
@@ -208,7 +211,10 @@ function App() {
   }, [appendLog, goTo]);
 
   useEffect(() => {
-    if (sourceMode !== "video" || !taskId || !roi || !crop || !lanes.length) return undefined;
+    const hasCompleteLane = lanes.some((lane) => (
+      lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2
+    ));
+    if (sourceMode !== "video" || !taskId || !videoId || !roi || !crop || !hasCompleteLane) return undefined;
     const timer = window.setTimeout(async () => {
       const config = buildLaneConfig({
         preview,
@@ -217,17 +223,16 @@ function App() {
         lanes,
         settings,
         videoFile,
-        includeDraft: true,
       });
       try {
-        await saveLaneConfig(taskId, config);
+        await saveLaneConfig(videoId, config);
         appendLog("draft geometry auto-saved");
       } catch (error) {
         appendLog(`draft auto-save failed: ${error.message}`);
       }
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [appendLog, crop, lanes, preview, roi, settings, sourceMode, taskId, videoFile]);
+  }, [appendLog, crop, lanes, preview, roi, settings, sourceMode, taskId, videoId, videoFile]);
 
   async function handleUpload(file) {
     if (!file) return;
@@ -239,6 +244,7 @@ function App() {
 
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setTaskId("");
+    setVideoId("");
     const localVideoUrl = URL.createObjectURL(file);
     setVideoFile(file);
     setVideoUrl(localVideoUrl);
@@ -256,7 +262,12 @@ function App() {
       setOperatorAlert(null);
       const response = await uploadVideo(file);
       setTaskId(response.task_id);
-      window.localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({ taskId: response.task_id, sourceMode: "video" }));
+      setVideoId(response.video_id || response.task_id);
+      window.localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({
+        taskId: response.task_id,
+        videoId: response.video_id || response.task_id,
+        sourceMode: "video",
+      }));
       setTaskStatus({ status: response.status, progress: 0 });
       appendLog(`task created: ${response.task_id}`);
 
@@ -277,6 +288,7 @@ function App() {
     if (!url?.trim()) return;
     if (videoUrl?.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
     setTaskId("");
+    setVideoId("");
     setVideoFile(null);
     setVideoUrl("");
     setPreview(null);
@@ -486,9 +498,9 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtime
       </nav>}
       <div className="top-actions">
         <button className="console-home-button" onClick={onHome} type="button" title="Back to TrafficFlow overview"><Icon name="arrow_left" /> Overview</button>
-        <span className={`deploy-pill health-${runtimeHealth}`} title={runtimeHealth === "online" ? "The API is responding" : "The API health state"}>
+        <span className={`deploy-pill health-${runtimeHealth}`} title={runtimeHealth === "online" ? "The runtime is ready" : "The runtime readiness state"}>
           <span className="live-indicator" />
-          {runtimeHealth === "online" ? "API online" : runtimeHealth === "checking" ? "Checking API" : "API offline"}
+          {runtimeHealth === "online" ? "Runtime ready" : runtimeHealth === "degraded" ? "Runtime degraded" : runtimeHealth === "checking" ? "Checking runtime" : "API offline"}
         </span>
         <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
           <Icon name="restart" />
@@ -713,7 +725,7 @@ function SideNav({ taskStatus, result, activeView, runtimeHealth, onNavigate }) 
         <span className={`status-dot health-${runtimeHealth}`} />
         <div>
           <h2>Core runtime</h2>
-          <p aria-live="polite">{runtimeHealth === "offline" ? "api offline" : taskStatus.status || "idle"}</p>
+          <p aria-live="polite">{runtimeHealth === "offline" ? "api offline" : runtimeHealth === "degraded" ? "queue or worker blocked" : taskStatus.status || "idle"}</p>
         </div>
       </div>
       <div className="side-caption">Workspace</div>
@@ -1656,9 +1668,9 @@ function createLane(index) {
   };
 }
 
-function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile, includeDraft = false }) {
+function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile }) {
   const validLanes = lanes
-    .filter((lane) => includeDraft || (lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2))
+    .filter((lane) => lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2)
     .map((lane) => ({
       lane_id: lane.lane_id.trim() || "lane",
       valid_zone: lane.valid_zone.map((point) => toSourcePoint(point, roi.cropRect)),

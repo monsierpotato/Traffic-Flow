@@ -63,7 +63,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 class TestConfig:
     def test_settings_loads_from_env(self):
-        from shared.config import settings
+        from shared.config import Settings
+
+        settings = Settings(_env_file=None)
         assert settings.MONGODB_DB_NAME == "trafficflow_test"
         assert settings.REDIS_URL == "redis://localhost:6379/0"
         assert settings.R2_ACCOUNT_ID == "placeholder_account_id"
@@ -242,30 +244,41 @@ class TestCeleryApp:
 # ---------------------------------------------------------------------------
 
 class TestR2Client:
-    def test_r2_client_is_mocked(self):
-        from shared.r2_client import r2_client
-        assert r2_client.is_mocked is True
+    @staticmethod
+    def _client(monkeypatch, tmp_path):
+        from shared.config import settings
+        from shared.r2_client import R2Client
 
-    def test_r2_upload_returns_url(self):
-        from shared.r2_client import r2_client
-        url = r2_client.upload_file(b"test", "test/file.txt", "text/plain")
+        monkeypatch.setattr(settings, "R2_ACCOUNT_ID", "placeholder_account_id")
+        monkeypatch.setattr(settings, "R2_ACCESS_KEY_ID", "placeholder_access_key")
+        monkeypatch.setattr(settings, "R2_SECRET_ACCESS_KEY", "placeholder_secret_key")
+        monkeypatch.setattr(settings, "STORAGE_DIR", str(tmp_path))
+        return R2Client()
+
+    def test_r2_client_is_mocked(self, monkeypatch, tmp_path):
+        client = self._client(monkeypatch, tmp_path)
+        assert client.is_mocked is True
+
+    def test_r2_upload_returns_url(self, monkeypatch, tmp_path):
+        client = self._client(monkeypatch, tmp_path)
+        url = client.upload_file(b"test", "test/file.txt", "text/plain")
         assert "test/file.txt" in url
 
-    def test_r2_upload_and_download_roundtrip(self):
-        from shared.r2_client import r2_client
+    def test_r2_upload_and_download_roundtrip(self, monkeypatch, tmp_path):
+        client = self._client(monkeypatch, tmp_path)
         content = b"hello trafficflow"
         key = "test/roundtrip.bin"
-        url = r2_client.upload_file(content, key, "application/octet-stream")
-        downloaded = r2_client.download_file(key)
+        client.upload_file(content, key, "application/octet-stream")
+        downloaded = client.download_file(key)
         assert downloaded == content
 
-    def test_r2_delete_removes_file(self):
-        from shared.r2_client import r2_client
+    def test_r2_delete_removes_file(self, monkeypatch, tmp_path):
+        client = self._client(monkeypatch, tmp_path)
         key = "test/to_delete.txt"
-        r2_client.upload_file(b"data", key, "text/plain")
-        local_path = r2_client.local_storage_dir / key
+        client.upload_file(b"data", key, "text/plain")
+        local_path = client.local_storage_dir / key
         assert local_path.exists()
-        r2_client.delete_file(key)
+        client.delete_file(key)
         assert not local_path.exists()
 
 

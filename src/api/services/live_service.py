@@ -15,8 +15,8 @@ import cv2
 import numpy as np
 
 from shared.config import settings
-from worker.pipeline.ai_client import InferenceClient
-from worker.pipeline.local_client import LocalInferenceClient
+from shared.safe_errors import redact_url_credentials, safe_error_message
+from worker.pipeline.inference_factory import build_inference_client
 from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space, shift_points_to_crop
 from worker.pipeline.renderer import FrameRenderer
 from worker.pipeline.detection_filter import filter_detections_for_tracking
@@ -418,7 +418,7 @@ class LiveSessionState:
         return {
             "session_id": self.session_id,
             # Do not expose signed googlevideo URLs to the browser or logs.
-            "source_url": self.source_origin_url or self.source_url,
+            "source_url": redact_url_credentials(self.source_origin_url or self.source_url),
             "status": self.status,
             "uptime_s": round(time.time() - self.created_at, 1),
             "frames_read": self.frames_read,
@@ -441,6 +441,10 @@ class LiveSessionState:
         }
 
 
+class LiveSessionLimitError(RuntimeError):
+    """Raised when the process has reached its configured live-session cap."""
+
+
 class LiveSessionManager:
     def __init__(self):
         self._sessions: Dict[str, LiveSessionState] = {}
@@ -460,13 +464,19 @@ class LiveSessionManager:
             source_origin_url=source_origin_url,
             source_expires_at=source_expires_at,
         )
-        with self._lock:
-            self._sessions[session.session_id] = session
         session.thread = threading.Thread(
             target=self._run_session,
             args=(session, lane_config or {}, max(1, frame_skip)),
             daemon=True,
         )
+        with self._lock:
+            active_count = sum(
+                session.status in {"starting", "running", "stopping"}
+                for session in self._sessions.values()
+            )
+            if active_count >= settings.LIVE_MAX_SESSIONS:
+                raise LiveSessionLimitError("Maximum number of concurrent live sessions reached")
+            self._sessions[session.session_id] = session
         session.thread.start()
         return session
 
@@ -505,12 +515,14 @@ class LiveSessionManager:
 
     def remove(self, session_id: str) -> bool:
         with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if not session:
-            return False
-        session.stop_event.set()
-        session.status = "stopping"
-        session.updated_at = time.time()
+            session = self._sessions.get(session_id)
+            if not session:
+                return False
+            session.stop_event.set()
+            session.status = "stopping"
+            session.updated_at = time.time()
+            if not session.thread or not session.thread.is_alive():
+                self._sessions.pop(session_id, None)
         return True
 
     def _run_session(self, session: LiveSessionState, lane_config: dict, frame_skip: int) -> None:
@@ -623,10 +635,7 @@ class LiveSessionManager:
             )
             counter = CountingState(lanes_processing, settings=lane_config.get("settings")) if lanes_processing else None
             session.counts = _empty_counts(lanes_processing or [])
-            if settings.AI_LOCAL or settings.AI_SERVING_URL == "local":
-                ai_client = LocalInferenceClient(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
-            else:
-                ai_client = InferenceClient(base_url=settings.AI_SERVING_URL, max_workers=1, request_timeout=30)
+            ai_client = build_inference_client(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
             ai_client.create_session()
             logger.info(
                 "Live inference ready: session=%s client=%s frame_skip=%s crop=%s lanes=%s",
@@ -874,7 +883,7 @@ class LiveSessionManager:
         except Exception as exc:
             logger.exception("Live session failed: %s", exc)
             session.status = "failed"
-            session.last_error = str(exc)
+            session.last_error = safe_error_message(exc)
         finally:
             session.updated_at = time.time()
             if cap is not None:

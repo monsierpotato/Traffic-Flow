@@ -4,6 +4,7 @@ import time
 import uuid
 import asyncio
 import threading
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.services.live_service import live_manager
+from api.services.live_service import LiveSessionLimitError
 from api.services.youtube_resolver import (
     ResolvedMedia,
     SourceResolutionError,
@@ -25,6 +27,7 @@ from api.services.youtube_resolver import (
     validate_direct_source_url,
 )
 from shared.config import settings
+from shared.safe_errors import redact_url_credentials
 
 router = APIRouter()
 
@@ -77,10 +80,12 @@ def _get_source(source_id: str) -> Optional[dict]:
 def _public_source(source: dict) -> dict:
     """Never expose a signed YouTube media URL or a filesystem path."""
     public = {key: value for key, value in source.items() if key not in {"preview_path", "resolved_url"}}
+    if "original_url" in public:
+        public["original_url"] = redact_url_credentials(public["original_url"])
     if is_youtube_url(source["original_url"]):
         public["source_url"] = source["original_url"]
     else:
-        public["source_url"] = source["resolved_url"]
+        public["source_url"] = redact_url_credentials(source["resolved_url"])
     return public
 
 
@@ -182,14 +187,29 @@ def _capture_snapshot(source_url: str, source_id: str) -> dict:
 
 
 def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
+    if not isinstance(config, dict):
+        return False, ["lane_config must be an object"]
+
     errors: list[str] = []
     resolution = config.get("resolution") or {}
-    width = int(resolution.get("width") or 0)
-    height = int(resolution.get("height") or 0)
+    if not isinstance(resolution, dict):
+        resolution = {}
+        errors.append("resolution must be an object")
+    try:
+        width = int(resolution.get("width") or 0)
+        height = int(resolution.get("height") or 0)
+    except (TypeError, ValueError):
+        width = height = 0
+        errors.append("resolution.width and resolution.height must be numbers")
     if width <= 0 or height <= 0:
         errors.append("resolution.width and resolution.height are required")
-    if not (config.get("processing_roi") or config.get("annotation_roi")):
+    processing_roi = config.get("processing_roi")
+    annotation_roi = config.get("annotation_roi")
+    if not (processing_roi or annotation_roi):
         errors.append("processing_roi or annotation_roi is required")
+    for label, roi in (("processing_roi", processing_roi), ("annotation_roi", annotation_roi)):
+        if roi is not None and not isinstance(roi, dict):
+            errors.append(f"{label} must be an object")
     geometry_space = config.get("geometry_space")
     if geometry_space is not None and geometry_space not in {"source_frame", "crop_local"}:
         errors.append("geometry_space must be source_frame or crop_local")
@@ -199,38 +219,81 @@ def _validate_lane_config(config: dict) -> tuple[bool, list[str]]:
     if geometry_space is None:
         geometry_space = "crop_local" if (config.get("crop_rect_padded") or config.get("processing_width")) else "source_frame"
     roi_polygon = config.get("roi_polygon") or []
+    if not isinstance(roi_polygon, list):
+        roi_polygon = []
+        errors.append("roi_polygon must be an array")
     if len(roi_polygon) < 3:
         errors.append("roi_polygon must contain at least 3 points")
     lanes = config.get("lanes") or []
+    if not isinstance(lanes, list):
+        lanes = []
+        errors.append("lanes must be an array")
     if not lanes:
         errors.append("at least one lane is required")
     for index, lane in enumerate(lanes, start=1):
         prefix = f"lane {index}"
-        if len(lane.get("valid_zone") or []) < 3:
+        if not isinstance(lane, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        valid_zone = lane.get("valid_zone") or []
+        counting_line = lane.get("counting_line") or []
+        direction = lane.get("direction") or []
+        if not isinstance(valid_zone, list):
+            valid_zone = []
+            errors.append(f"{prefix}: valid_zone must be an array")
+        if not isinstance(counting_line, list):
+            counting_line = []
+            errors.append(f"{prefix}: counting_line must be an array")
+        if not isinstance(direction, list):
+            direction = []
+            errors.append(f"{prefix}: direction must be an array")
+        if len(valid_zone) < 3:
             errors.append(f"{prefix}: valid_zone must contain at least 3 points")
-        if len(lane.get("counting_line") or []) != 2:
+        if len(counting_line) != 2:
             errors.append(f"{prefix}: counting_line must contain exactly 2 points")
-        if len(lane.get("direction") or []) != 2:
+        if len(direction) != 2:
             errors.append(f"{prefix}: direction must contain exactly 2 points")
     if geometry_space == "source_frame":
         coordinate_width, coordinate_height = width, height
     else:
-        crop = config.get("crop_rect_padded") or config.get("processing_roi") or config.get("annotation_roi") or {}
-        coordinate_width = int(config.get("processing_width") or crop.get("width") or 0)
-        coordinate_height = int(config.get("processing_height") or crop.get("height") or 0)
+        crop = config.get("crop_rect_padded") or processing_roi or annotation_roi or {}
+        if not isinstance(crop, dict):
+            crop = {}
+        try:
+            coordinate_width = int(config.get("processing_width") or crop.get("width") or 0)
+            coordinate_height = int(config.get("processing_height") or crop.get("height") or 0)
+        except (TypeError, ValueError):
+            coordinate_width = coordinate_height = 0
+            errors.append("crop dimensions must be numbers")
     if coordinate_width > 0 and coordinate_height > 0:
-        all_geometry = [("roi_polygon", roi_polygon)]
+        def point_in_bounds(point: Any, point_width: int, point_height: int) -> bool:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                return False
+            try:
+                x, y = float(point[0]), float(point[1])
+            except (TypeError, ValueError):
+                return False
+            return math.isfinite(x) and math.isfinite(y) and 0 <= x <= point_width and 0 <= y <= point_height
+
+        for point in roi_polygon:
+            if not point_in_bounds(point, width, height):
+                errors.append(f"roi_polygon: point {point} is outside source_frame bounds")
+                break
+
         for index, lane in enumerate(lanes, start=1):
-            all_geometry.extend([
+            if not isinstance(lane, dict):
+                continue
+            for label, points in (
                 (f"lane {index}.valid_zone", lane.get("valid_zone") or []),
                 (f"lane {index}.counting_line", lane.get("counting_line") or []),
                 (f"lane {index}.direction", lane.get("direction") or []),
-            ])
-        for label, points in all_geometry:
-            for point in points:
-                if len(point) >= 2 and not (0 <= point[0] < coordinate_width and 0 <= point[1] < coordinate_height):
-                    errors.append(f"{label}: point {point} is outside {geometry_space} bounds")
-                    break
+            ):
+                if not isinstance(points, list):
+                    continue
+                for point in points:
+                    if not point_in_bounds(point, coordinate_width, coordinate_height):
+                        errors.append(f"{label}: point {point} is outside {geometry_space} bounds")
+                        break
     return not errors, errors
 
 
@@ -315,13 +378,16 @@ async def create_live_session(payload: LiveSessionCreate):
         source_origin_url = payload.source_url if is_youtube_url(payload.source_url) else None
         source_expires_at = media.expires_at
 
-    session = live_manager.create(
-        source_url=source_url,
-        lane_config=payload.lane_config,
-        frame_skip=payload.frame_skip,
-        source_origin_url=source_origin_url,
-        source_expires_at=source_expires_at,
-    )
+    try:
+        session = live_manager.create(
+            source_url=source_url,
+            lane_config=payload.lane_config,
+            frame_skip=payload.frame_skip,
+            source_origin_url=source_origin_url,
+            source_expires_at=source_expires_at,
+        )
+    except LiveSessionLimitError as exc:
+        raise HTTPException(429, str(exc)) from exc
     return session.snapshot()
 
 
@@ -402,4 +468,7 @@ async def stop_live_session(session_id: str):
 async def remove_live_session(session_id: str):
     if not live_manager.remove(session_id):
         raise HTTPException(404, 'Live session not found')
-    return {'session_id': session_id, 'status': 'removed'}
+    return {
+        'session_id': session_id,
+        'status': 'stopping' if live_manager.get(session_id) else 'removed',
+    }

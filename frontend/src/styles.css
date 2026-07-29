@@ -796,6 +796,10 @@ body { font-family: "Ubuntu", "Plus Jakarta Sans", Inter, system-ui, sans-serif;
   background: var(--warning);
   box-shadow: 0 0 0 4px rgba(169, 103, 22, .14);
 }
+.status-dot.health-degraded, .deploy-pill.health-degraded .live-indicator {
+  background: #d6a64f;
+  box-shadow: 0 0 0 4px rgba(214, 166, 79, .14);
+}
 .deploy-pill.health-online .live-indicator { background: var(--success); }
 .live-panel .live-controls { grid-template-columns: minmax(240px, 1fr) auto auto auto; }
 .chart-empty { border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); padding: 16px; text-align: center; }

@@ -57,11 +57,11 @@ async def process_task(
     db = Depends(get_database)
 ):
     """Validate the configured task and enqueue it in Celery."""
-    task = await db.tasks.find_one({"video_id": payload.video_id})
+    task = await find_task(db, payload.video_id)
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task or video session not found for video_id {payload.video_id}"
+            detail=f"Task or video session not found for identifier {payload.video_id}"
         )
 
     if task["status"] == "uploaded":
@@ -84,7 +84,12 @@ async def process_task(
 
     task_id = task["task_id"]
 
-    lane_config = await db.lane_configs.find_one({"task_id": task_id})
+    lane_config = await db.lane_configs.find_one({
+        "$or": [
+            {"task_id": task_id},
+            {"video_id": task.get("video_id")},
+        ]
+    })
     if not lane_config:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -373,10 +378,10 @@ async def get_task_result(
         result_video_url=task.get("result_video_url"),
         events_url=task.get("events_url"),
         statistics=result_statistics,
-        total_vehicles=task.get("global_unique_count") or total_vehicles,
-        lane_volume_total=task.get("lane_volume_total") or total_vehicles,
-        global_unique_count=task.get("global_unique_count") or total_vehicles,
-        multi_lane_track_count=task.get("multi_lane_track_count") or 0,
+        total_vehicles=(task.get("global_unique_count") if task.get("global_unique_count") is not None else total_vehicles),
+        lane_volume_total=(task.get("lane_volume_total") if task.get("lane_volume_total") is not None else total_vehicles),
+        global_unique_count=(task.get("global_unique_count") if task.get("global_unique_count") is not None else total_vehicles),
+        multi_lane_track_count=(task.get("multi_lane_track_count") if task.get("multi_lane_track_count") is not None else 0),
         multi_lane_tracks=task.get("multi_lane_tracks") or [],
         processing_time_seconds=proc_time,
         lane_config=_public_lane_config(lane_config)

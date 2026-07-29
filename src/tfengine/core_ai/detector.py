@@ -36,7 +36,7 @@ class YoloByteTrackDetector:
         try:
             from ultralytics import YOLO
         except ImportError as exc:
-            raise RuntimeError(
+            raise ImportError(
                 "Missing dependency 'ultralytics'. Install it to run Phase B: "
                 "python -m pip install ultralytics"
             ) from exc

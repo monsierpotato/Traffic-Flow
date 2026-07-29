@@ -120,3 +120,40 @@ def test_live_manager_cleanup_stale_terminal_sessions(monkeypatch):
 
     assert manager.cleanup_stale() == 1
     assert manager.get("old") is None
+
+
+def test_live_remove_keeps_running_thread_registered_until_it_stops():
+    from types import SimpleNamespace
+
+    manager = LiveSessionManager()
+    session = LiveSessionState(session_id="active", source_url="http://example.test/live.m3u8")
+    session.status = "running"
+    thread = SimpleNamespace(is_alive=lambda: True)
+    session.thread = thread
+    manager._sessions[session.session_id] = session
+
+    assert manager.remove(session.session_id) is True
+    assert manager.get(session.session_id) is session
+    assert session.status == "stopping"
+
+    thread.is_alive = lambda: False
+    assert manager.remove(session.session_id) is True
+    assert manager.get(session.session_id) is None
+
+
+def test_live_manager_enforces_session_limit_atomically(monkeypatch):
+    from shared.config import settings
+    from api.services.live_service import LiveSessionLimitError
+
+    manager = LiveSessionManager()
+    existing = LiveSessionState(session_id="existing", source_url="http://example.test/live.m3u8")
+    existing.status = "running"
+    manager._sessions[existing.session_id] = existing
+    monkeypatch.setattr(settings, "LIVE_MAX_SESSIONS", 1)
+
+    try:
+        manager.create("http://example.test/next.m3u8", {})
+    except LiveSessionLimitError:
+        pass
+    else:
+        raise AssertionError("expected live session limit to reject the new session")

@@ -86,3 +86,23 @@ def test_create_session_resolves_legacy_youtube_page_url(monkeypatch) -> None:
 
     assert captured["source_origin_url"] == original
     assert captured["source_url"].startswith("https://manifest.googlevideo.com/")
+
+
+def test_live_validation_returns_errors_for_malformed_input() -> None:
+    valid, errors = live._validate_lane_config({"resolution": {"width": "bad"}, "lanes": "bad"})
+
+    assert valid is False
+    assert errors
+
+
+def test_live_validation_keeps_roi_polygon_in_source_coordinates() -> None:
+    config = _valid_lane_config()
+    config["resolution"] = {"width": 1000, "height": 1000}
+    config["processing_roi"] = {"x": 100, "y": 100, "width": 100, "height": 100}
+    config["geometry_space"] = "crop_local"
+    config["roi_polygon"] = [[900, 900], [999, 900], [999, 999]]
+    config["lanes"][0]["valid_zone"] = [[0, 0], [99, 0], [99, 99]]
+
+    valid, errors = live._validate_lane_config(config)
+
+    assert valid is True, errors
