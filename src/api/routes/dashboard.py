@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
-from shared.database import get_database
+from datetime import datetime
+from api.dependencies import require_database
 from api.schemas.dashboard import DashboardStatsResponse, RecentTask
 
 router = APIRouter()
 
 @router.get("/stats", response_model=DashboardStatsResponse)
-async def get_dashboard_stats(db = Depends(get_database)):
+async def get_dashboard_stats(db = Depends(require_database)):
     """Aggregates metrics for the frontend control dashboard."""
     # 1. Counts of tasks by status
     total_tasks = await db.tasks.count_documents({})
