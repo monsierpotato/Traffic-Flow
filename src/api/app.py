@@ -136,16 +136,22 @@ def create_app() -> FastAPI:
                 worker_mode = "remote_fallback"
 
         worker_status = "ready" if queue_ready and worker_ready else "blocked"
+        production_env = settings.APP_ENV.lower() in {"production", "prod"}
+        callback_auth_ready = not production_env or bool(settings.CALLBACK_TOKEN)
         payload = {
-            "status": "ready" if queue_ready and worker_ready else "degraded",
+            "status": "ready" if queue_ready and worker_ready and callback_auth_ready else "degraded",
             "database": "local_json" if database.db_instance.using_local_fallback else "mongodb",
             "queue": {
                 "configured": bool(settings.REDIS_URL),
                 "status": "ready" if queue_ready else "blocked",
             },
             "worker": {"status": worker_status, "mode": worker_mode, "reason": worker_reason},
+            "security": {
+                "callback_auth": "ready" if callback_auth_ready else "blocked",
+                "reason": None if callback_auth_ready else "callback_token_missing",
+            },
         }
-        return payload if queue_ready and worker_ready else JSONResponse(status_code=503, content=payload)
+        return payload if queue_ready and worker_ready and callback_auth_ready else JSONResponse(status_code=503, content=payload)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -177,6 +183,8 @@ def create_app() -> FastAPI:
             # Returning the small shell as HTML avoids a Starlette
             # FileResponse/ASGITransport deadlock while preserving the normal
             # static mount for hashed JS/CSS assets and browser navigation.
+            if not frontend_index.is_file():
+                return HTMLResponse("Frontend build is not available.", status_code=404)
             return HTMLResponse(frontend_index.read_text(encoding="utf-8"))
 
         app.mount("/", StaticFiles(directory=str(frontend_dist_dir), html=True), name="frontend")

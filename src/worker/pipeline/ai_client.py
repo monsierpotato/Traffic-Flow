@@ -15,7 +15,9 @@ def _retry_session(retries=3, backoff=1.0, status_forcelist=(500, 502, 503, 504)
     retry = Retry(
         total=retries, read=retries, connect=retries,
         backoff_factor=backoff, status_forcelist=status_forcelist,
-        allowed_methods=["GET", "POST", "PUT", "DELETE"],
+        # Inference and session creation are POSTs with stateful side effects;
+        # replaying them can duplicate a frame or create a second session.
+        allowed_methods=["GET", "DELETE"],
     )
     session.mount("https://", HTTPAdapter(max_retries=retry))
     session.mount("http://", HTTPAdapter(max_retries=retry))

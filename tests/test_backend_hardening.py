@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pymongo.errors import OperationFailure
 from starlette.requests import Request
 
-from api.routes.tasks import process_task, task_progress_callback
+from api.routes.tasks import get_task_status, process_task, task_progress_callback
 from api.routes import frontend_compat
 from api.routes.lanes import configure_lanes
 from api.routes.dashboard import get_dashboard_stats
@@ -89,6 +89,28 @@ def test_progress_callback_rejects_regression() -> None:
     db.tasks.update_one.assert_not_awaited()
 
 
+def test_production_requires_callback_authentication(monkeypatch) -> None:
+    import asyncio
+
+    from api.routes import tasks
+
+    database = AsyncMock()
+    monkeypatch.setattr(tasks.settings, "APP_ENV", "production")
+    monkeypatch.setattr(tasks.settings, "CALLBACK_TOKEN", "")
+    request = Request({"type": "http", "method": "PUT", "headers": []})
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(task_progress_callback(
+            "task-1",
+            TaskProgressCallback(status="processing", progress=1),
+            request,
+            database,
+        ))
+
+    assert error.value.status_code == 503
+    database.tasks.find_one.assert_not_awaited()
+
+
 def test_mongo_index_migration_accepts_legacy_equivalent_index() -> None:
     import asyncio
 
@@ -166,6 +188,19 @@ def test_dashboard_tolerates_legacy_task_documents(tmp_path: Path) -> None:
     assert response.recent_tasks[0].progress == 0
 
 
+def test_task_status_tolerates_legacy_task_documents(tmp_path: Path) -> None:
+    import asyncio
+
+    database = LocalJsonDatabase(str(tmp_path / "database.json"))
+    asyncio.run(database.tasks.insert_one({"video_id": "video-legacy", "status": "uploaded"}))
+
+    response = asyncio.run(get_task_status("video-legacy", database))
+
+    assert response.task_id == "video-legacy"
+    assert response.status == "uploaded"
+    assert response.progress == 0
+
+
 def test_safe_error_message_redacts_connection_credentials() -> None:
     from shared.safe_errors import redact_url_credentials, safe_error_message
 
@@ -203,6 +238,18 @@ def test_inference_factory_falls_back_to_remote_when_local_is_unavailable(monkey
     assert isinstance(client, RemoteClient)
 
 
+def test_inference_client_does_not_retry_stateful_posts() -> None:
+    from worker.pipeline.ai_client import _retry_session
+
+    session = _retry_session()
+    try:
+        methods = session.get_adapter("https://").max_retries.allowed_methods
+        assert "POST" not in methods
+        assert {"GET", "DELETE"}.issubset(methods)
+    finally:
+        session.close()
+
+
 def test_chunk_completion_rejects_corrupt_metadata(tmp_path: Path, monkeypatch) -> None:
     import asyncio
 
@@ -236,6 +283,31 @@ def test_lane_config_cannot_reopen_processing_task(tmp_path: Path) -> None:
         asyncio.run(configure_lanes(LaneConfigRequest.model_validate(_lane_config()), database))
 
     assert error.value.status_code == 409
+
+
+def test_compat_submit_cannot_reopen_processing_task(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    database = LocalJsonDatabase(str(tmp_path / "database.json"))
+    now = __import__("datetime").datetime.utcnow()
+    asyncio.run(database.tasks.insert_one({
+        "task_id": "task-1",
+        "video_id": "video-1",
+        "status": "processing",
+        "created_at": now,
+        "updated_at": now,
+    }))
+    monkeypatch.setattr(frontend_compat, "get_database", lambda: database)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(frontend_compat.compat_submit(
+            Request({"type": "http", "method": "POST", "headers": [], "path": "/tasks"}),
+            {"task_id": "task-1", "lane_config": _lane_config()},
+        ))
+
+    saved = asyncio.run(database.tasks.find_one({"task_id": "task-1"}))
+    assert error.value.status_code == 409
+    assert saved["status"] == "processing"
 
 
 def test_lane_config_claims_uploaded_task_and_persists_config(tmp_path: Path) -> None:
@@ -292,6 +364,32 @@ def test_expired_task_cleanup_removes_local_preview(tmp_path: Path, monkeypatch)
     assert not preview.exists()
 
 
+def test_expired_legacy_task_cleanup_does_not_crash(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime, timedelta
+
+    from api.services import cleanup_service
+    from shared.config import settings
+
+    database = LocalJsonDatabase(str(tmp_path / "database.json"))
+    now = datetime.utcnow()
+    asyncio.run(database.tasks.insert_one({
+        "video_id": "video-legacy",
+        "status": "completed",
+        "expires_at": now - timedelta(minutes=1),
+        "created_at": now,
+        "updated_at": now,
+    }))
+    monkeypatch.setattr(cleanup_service.db_instance, "db", database)
+    monkeypatch.setattr(settings, "STORAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(cleanup_service.r2_client, "delete_file", lambda _key: None)
+
+    asyncio.run(cleanup_service.run_data_cleanup())
+
+    task = asyncio.run(database.tasks.find_one({"video_id": "video-legacy"}))
+    assert task["status"] == "archived"
+
+
 def test_queue_failure_marks_claimed_task_failed(tmp_path: Path, monkeypatch) -> None:
     import asyncio
     from datetime import datetime
@@ -325,3 +423,29 @@ def test_queue_failure_marks_claimed_task_failed(tmp_path: Path, monkeypatch) ->
     assert error.value.status_code == 503
     assert saved["status"] == "failed"
     assert saved["stage"] == "queue_unavailable"
+
+
+def test_process_rejects_task_without_source_before_claiming(tmp_path: Path) -> None:
+    import asyncio
+    from datetime import datetime
+
+    database = LocalJsonDatabase(str(tmp_path / "database.json"))
+    now = datetime.utcnow()
+    asyncio.run(database.tasks.insert_one({
+        "task_id": "task-1",
+        "video_id": "video-1",
+        "status": "configured",
+        "created_at": now,
+        "updated_at": now,
+    }))
+    config = _lane_config()
+    config["task_id"] = "task-1"
+    asyncio.run(database.lane_configs.insert_one(config))
+
+    request = Request({"type": "http", "method": "POST", "path": "/api/v1/tasks/process", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(process_task(TaskCreateRequest(video_id="video-1"), request, database))
+
+    saved = asyncio.run(database.tasks.find_one({"task_id": "task-1"}))
+    assert error.value.status_code == 422
+    assert saved["status"] == "configured"

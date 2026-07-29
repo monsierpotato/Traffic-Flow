@@ -3,7 +3,6 @@
 import logging
 import os
 from pathlib import Path
-from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
@@ -15,6 +14,7 @@ from api.services.upload_service import create_uploaded_video_task_from_path, sa
 from api.schemas.task import TaskCreateRequest
 from api.schemas.lane import LaneConfigRequest
 from api.routes.tasks import find_task, process_task, get_task_status, get_task_result
+from api.routes.lanes import configure_lanes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,11 +83,18 @@ async def compat_submit(request: Request, payload: dict):
     if not task:
         raise HTTPException(404, f"No upload session found for {identifier}")
 
-    task_id = task["task_id"]
-    video_id = task["video_id"]
+    task_id = task.get("task_id")
+    if not task_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Legacy upload has no canonical task_id and cannot be processed.",
+        )
+    video_id = task.get("video_id") or identifier
 
     # Save lane config if provided by frontend
     if lane_config:
+        if not isinstance(lane_config, dict):
+            raise HTTPException(status_code=422, detail="Invalid lane configuration")
         cfg = dict(lane_config)
         cfg["video_id"] = video_id
         try:
@@ -98,19 +105,9 @@ async def compat_submit(request: Request, payload: dict):
         except Exception as exc:
             raise HTTPException(status_code=422, detail="Invalid lane configuration") from exc
 
-        cfg = validated_cfg.model_dump()
-        cfg["video_id"] = video_id
-        cfg["task_id"] = task_id
-        cfg["created_at"] = datetime.utcnow()
-        await db.lane_configs.update_one(
-            {"video_id": video_id},
-            {"$set": cfg},
-            upsert=True,
-        )
-        await db.tasks.update_one(
-            {"task_id": task_id},
-            {"$set": {"status": "configured", "updated_at": datetime.utcnow()}},
-        )
+        # Reuse the canonical route so compatibility clients cannot bypass
+        # task-state validation and reopen an active/terminal task.
+        await configure_lanes(validated_cfg, db=db)
 
     try:
         req = TaskCreateRequest(video_id=video_id)

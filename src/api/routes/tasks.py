@@ -3,7 +3,7 @@ import os
 import logging
 from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from api.dependencies import require_database
+from shared.database import get_database
 from shared.config import settings
 from worker.celery_app import celery_app
 from api.schemas.task import (
@@ -40,7 +40,7 @@ async def find_task(db, identifier: str):
 
 def _public_lane_config(lane_config: dict | None) -> dict | None:
     """Return a JSON-safe read snapshot without Mongo-only metadata."""
-    if not lane_config:
+    if not isinstance(lane_config, dict) or not lane_config:
         return None
     return {
         key: value
@@ -54,9 +54,16 @@ def _public_lane_config(lane_config: dict | None) -> dict | None:
 async def process_task(
     payload: TaskCreateRequest,
     request: Request,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Validate the configured task and enqueue it in Celery."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
+    if settings.APP_ENV.lower() in {"production", "prod"} and not settings.CALLBACK_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Worker callback authentication is not configured for production.",
+        )
     task = await find_task(db, payload.video_id)
     if not task:
         raise HTTPException(
@@ -64,25 +71,31 @@ async def process_task(
             detail=f"Task or video session not found for identifier {payload.video_id}"
         )
 
-    if task["status"] == "uploaded":
+    current_status = task.get("status") or "uploaded"
+    if current_status == "uploaded":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Lane configuration is required before processing. Please configure lanes first."
         )
 
-    if task["status"] in PROCESSING_STATUSES:
+    if current_status in PROCESSING_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Task is already {task['status']}. Wait for it to complete."
+            detail=f"Task is already {current_status}. Wait for it to complete."
         )
 
-    if task["status"] in TERMINAL_STATUSES:
+    if current_status in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Task has already {task['status']}. Create a new upload to process again."
+            detail=f"Task has already {current_status}. Create a new upload to process again."
         )
 
-    task_id = task["task_id"]
+    task_id = task.get("task_id")
+    if not task_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task has no canonical task_id and cannot be processed.",
+        )
 
     lane_config = await db.lane_configs.find_one({
         "$or": [
@@ -94,6 +107,20 @@ async def process_task(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No lane configuration found. Please post config first."
+        )
+    if not isinstance(lane_config, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Stored lane configuration is invalid. Reconfigure the upload before processing.",
+        )
+
+    # Validate the source before claiming the task. A malformed legacy task
+    # must not be left in ``pending`` after this request fails.
+    process_video_url = task.get("working_video_url") or task.get("video_url")
+    if not process_video_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Task has no source video URL.",
         )
 
     # Keep callbacks explicit for the native worker; fallback to the request URL.
@@ -154,11 +181,9 @@ async def process_task(
     # Strip non-serializable MongoDB fields
     for k in ("_id", "created_at", "updated_at"):
         serializable_config.pop(k, None)
-    
+
     # Directly enqueue task with original video URL and config
     # Use working (1080p) copy for processing; fallback to original
-    process_video_url = task.get("working_video_url") or task["video_url"]
-
     try:
         celery_app.send_task(
             "trafficflow.process_video",
@@ -195,9 +220,11 @@ async def process_task(
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(
     task_id: str,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Retrieves the current status and progress of a task."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     task = await find_task(db, task_id)
     if not task:
         raise HTTPException(
@@ -205,14 +232,18 @@ async def get_task_status(
             detail=f"Task with id {task_id} not found."
         )
 
+    try:
+        progress = int(task.get("progress") or 0)
+    except (TypeError, ValueError):
+        progress = 0
     return TaskStatusResponse(
-        task_id=task["task_id"],
-        status=task["status"],
-        progress=task["progress"],
+        task_id=task.get("task_id") or task.get("video_id") or task_id,
+        status=task.get("status") or "uploaded",
+        progress=progress,
         stage=task.get("stage"),
         stage_detail=task.get("stage_detail"),
-        created_at=task["created_at"],
-        updated_at=task["updated_at"],
+        created_at=task.get("created_at") or datetime.utcnow(),
+        updated_at=task.get("updated_at") or task.get("created_at") or datetime.utcnow(),
         error_message=task.get("error_message")
     )
 
@@ -221,9 +252,16 @@ async def task_progress_callback(
     task_id: str,
     payload: TaskProgressCallback,
     request: Request,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Endpoint for Worker to report progress updates, failures, or completion."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
+    if settings.APP_ENV.lower() in {"production", "prod"} and not settings.CALLBACK_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Worker callback authentication is not configured for production.",
+        )
     if settings.CALLBACK_TOKEN:
         supplied = request.headers.get("authorization", "")
         if supplied != f"Bearer {settings.CALLBACK_TOKEN}":
@@ -242,7 +280,10 @@ async def task_progress_callback(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Invalid task status transition: {current_status} -> {payload.status}",
         )
-    current_progress = int(task.get("progress", 0) or 0)
+    try:
+        current_progress = int(task.get("progress", 0) or 0)
+    except (TypeError, ValueError):
+        current_progress = 0
     if payload.progress < current_progress and payload.status != "failed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -305,9 +346,11 @@ async def task_progress_callback(
 @router.get("/result/{task_id}", response_model=TaskResultResponse)
 async def get_task_result(
     task_id: str,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Retrieves final video result URL, log file URL, and aggregated statistics."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     task = await find_task(db, task_id)
     if not task:
         raise HTTPException(
@@ -315,12 +358,13 @@ async def get_task_result(
             detail=f"Task with id {task_id} not found."
         )
 
-    actual_task_id = task["task_id"]
+    actual_task_id = task.get("task_id") or task.get("video_id") or task_id
+    task_status = task.get("status") or "uploaded"
 
-    if task["status"] != "completed":
+    if task_status != "completed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Task is in status '{task['status']}' and has not completed yet."
+            detail=f"Task is in status '{task_status}' and has not completed yet."
         )
 
     # Fetch Lane config to get lane names mapping
@@ -328,8 +372,10 @@ async def get_task_result(
         "$or": [{"task_id": actual_task_id}, {"video_id": task.get("video_id")}]
     })
     lane_names = {}
-    if lane_config:
-        for lane in lane_config.get("lanes", []):
+    if isinstance(lane_config, dict):
+        for lane in lane_config.get("lanes", []) or []:
+            if not isinstance(lane, dict) or not lane.get("lane_id"):
+                continue
             lane_names[lane["lane_id"]] = lane.get("name", lane["lane_id"])
 
     # Fetch and aggregate statistics
@@ -340,9 +386,16 @@ async def get_task_result(
     # Structure: lane_id -> { vehicle_type -> total_count }
     aggregated: Dict[str, Dict[str, int]] = {}
     for stat in stats_list:
-        lane_id = stat["lane_id"]
-        v_type = stat["vehicle_type"]
-        cnt = stat["count"]
+        if not isinstance(stat, dict):
+            continue
+        lane_id = stat.get("lane_id")
+        v_type = stat.get("vehicle_type")
+        if not lane_id or not v_type:
+            continue
+        try:
+            cnt = int(stat.get("count") or 0)
+        except (TypeError, ValueError):
+            continue
         
         if lane_id not in aggregated:
             aggregated[lane_id] = {}
@@ -370,11 +423,14 @@ async def get_task_result(
     # Calculate processing time from created_at and updated_at
     proc_time = None
     if task.get("created_at") and task.get("updated_at"):
-        proc_time = (task["updated_at"] - task["created_at"]).total_seconds()
+        try:
+            proc_time = (task["updated_at"] - task["created_at"]).total_seconds()
+        except (AttributeError, TypeError):
+            proc_time = None
 
     return TaskResultResponse(
-        task_id=task["task_id"],
-        status=task["status"],
+        task_id=actual_task_id,
+        status=task_status,
         result_video_url=task.get("result_video_url"),
         events_url=task.get("events_url"),
         statistics=result_statistics,

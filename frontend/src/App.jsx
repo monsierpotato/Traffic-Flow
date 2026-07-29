@@ -59,6 +59,64 @@ const emptyDashboardStats = {
   vehicle_totals_by_type: {},
 };
 
+const CAMERA_PROFILES = [
+  {
+    id: "cam-01",
+    code: "CAM-01",
+    name: "North Gate",
+    location: "Nguyen Van Linh",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+  {
+    id: "cam-02",
+    code: "CAM-02",
+    name: "Riverside",
+    location: "Tran Hung Dao",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+  {
+    id: "cam-03",
+    code: "CAM-03",
+    name: "Downtown East",
+    location: "Le Duan Junction",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+];
+
+function flattenLiveCounts(counts = {}) {
+  return Object.values(counts).reduce((totals, laneCounts) => {
+    if (!laneCounts || typeof laneCounts !== "object") return totals;
+    Object.entries(laneCounts).forEach(([vehicleType, count]) => {
+      totals[vehicleType] = (totals[vehicleType] || 0) + Number(count || 0);
+    });
+    return totals;
+  }, {});
+}
+
+function formatAge(timestamp) {
+  if (!timestamp) return "--";
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - Number(timestamp)));
+  return seconds < 2 ? "just now" : `${seconds}s`;
+}
+
 function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [stepIndex, setStepIndex] = useState(0);
@@ -69,6 +127,7 @@ function App() {
   const [videoUrl, setVideoUrl] = useState("");
   const [sourceMode, setSourceMode] = useState("video");
   const [liveSource, setLiveSource] = useState(null);
+  const [liveSession, setLiveSession] = useState(null);
   const [preview, setPreview] = useState(null);
   const [roi, setRoi] = useState(null);
   const [crop, setCrop] = useState(null);
@@ -107,8 +166,37 @@ function App() {
     }
   }, []);
 
+  const clearCurrentLiveSession = useCallback(async () => {
+    const sessionId = liveSession?.session_id;
+    if (sessionId) {
+      try {
+        // DELETE /remove requests a graceful stop. Wait for the worker thread
+        // to leave the active-session set before another source is resolved;
+        // otherwise a fast source switch can hit LIVE_MAX_SESSIONS (429).
+        await removeLive(sessionId);
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          try {
+            const current = await fetchLiveSession(sessionId);
+            if (["stopped", "failed", "ended", "completed"].includes(current.status)) break;
+          } catch {
+            break;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+        }
+        await removeLive(sessionId).catch(() => {
+          // The session may already be terminal and removed by cleanup.
+        });
+      } catch {
+        // The session may already be terminal; local state still needs clearing.
+      }
+    }
+    setLiveSession(null);
+  }, [liveSession?.session_id]);
+
   const resetWorkflow = useCallback(() => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    clearCurrentLiveSession().catch(() => {});
     setStepIndex(0);
     setActiveView("sources");
     setTaskId("");
@@ -117,6 +205,7 @@ function App() {
     setVideoUrl("");
     setSourceMode("video");
     setLiveSource(null);
+    setLiveSession(null);
     setPreview(null);
     setRoi(null);
     setCrop(null);
@@ -128,7 +217,7 @@ function App() {
     setOperatorAlert(null);
     window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     setLogs(["> initialize_pipeline()", "> waiting for input stream..."]);
-  }, [videoUrl]);
+  }, [clearCurrentLiveSession, videoUrl]);
 
   const goTo = useCallback((nextIndex) => {
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, nextIndex)));
@@ -169,6 +258,28 @@ function App() {
     const timer = window.setInterval(refreshDashboardStats, 30000);
     return () => window.clearInterval(timer);
   }, [refreshDashboardStats]);
+
+  useEffect(() => {
+    if (!liveSession?.session_id) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await fetchLiveSession(liveSession.session_id);
+        if (!cancelled && next) setLiveSession(next);
+      } catch (error) {
+        if (!cancelled) {
+          setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
+          appendLog(`live polling failed: ${error.message}`);
+        }
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [appendLog, liveSession?.session_id]);
 
   useEffect(() => {
     let saved;
@@ -242,6 +353,7 @@ function App() {
       return;
     }
 
+    await clearCurrentLiveSession();
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setTaskId("");
     setVideoId("");
@@ -286,6 +398,7 @@ function App() {
 
   async function handleLiveResolve(url) {
     if (!url?.trim()) return;
+    await clearCurrentLiveSession();
     if (videoUrl?.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
     setTaskId("");
     setVideoId("");
@@ -406,6 +519,10 @@ function App() {
               taskStatus={taskStatus}
               result={result}
               sourceMode={sourceMode}
+              videoUrl={videoUrl}
+              preview={preview}
+              liveSource={liveSource}
+              liveSession={liveSession}
               stats={dashboardStats}
               statsState={dashboardStatsState}
               statsError={dashboardStatsError}
@@ -443,6 +560,8 @@ function App() {
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
               onAlert={setOperatorAlert}
+              liveSession={liveSession}
+              setLiveSession={setLiveSession}
             />
           )}
           {activeView === "runs" && (!submittedConfig || sourceMode !== "video") && <EmptyState eyebrow="Batch runs" title="No batch run is ready to inspect." message="Batch Runs is only for uploaded recordings. Complete Geometry for a recording, then submit it here." actionLabel="Open Sources" onAction={() => navigateToView("sources")} />}
@@ -462,6 +581,8 @@ function App() {
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
               onAlert={setOperatorAlert}
+              liveSession={liveSession}
+              setLiveSession={setLiveSession}
             />
           )}
           {activeView === "live" && (sourceMode !== "live" || !submittedConfig) && <EmptyState eyebrow="Live monitor" title="Live monitoring is not configured yet." message="Resolve a live source, define its geometry, and validate the configuration before starting a session." actionLabel={sourceMode === "live" ? "Open Geometry" : "Open Sources"} onAction={() => navigateToView(sourceMode === "live" ? "geometry" : "sources")} />}
@@ -510,71 +631,144 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtime
   );
 }
 
-function DashboardHome({ taskId, taskStatus, result, sourceMode, stats, statsState, statsError, onRefreshStats, onNavigate }) {
-  const currentState = taskStatus.status || "draft";
-  const vehicleTotal = Object.values(stats.vehicle_totals_by_type || {}).reduce((total, value) => total + Number(value || 0), 0);
-  const modules = [
-    { id: "sources", icon: "videocam", eyebrow: "01 / Inputs", title: "Sources", text: "Upload a recording or resolve a live stream and create a reference frame." },
-    { id: "geometry", icon: "schema", eyebrow: "02 / Annotation", title: "Geometry", text: "Define the ROI, lane zones, counting lines, and direction vectors." },
-    { id: "runs", icon: "analytics", eyebrow: "03 / Batch", title: "Batch Runs", text: "Track one submitted recording and inspect its output and lane counts." },
-    { id: "reports", icon: "download", eyebrow: "04 / Reporting", title: "Reports", text: "Export the current result and review recent processing jobs." },
-    { id: "live", icon: "broadcast", eyebrow: "05 / Realtime", title: "Live Monitor", text: "Start one live inference session and monitor its stream health." },
-    { id: "logs", icon: "terminal", eyebrow: "06 / Diagnostics", title: "System Logs", text: "Review runtime events and failures in a dedicated diagnostic view." },
-  ];
+function DashboardHome({ taskId, taskStatus, result, sourceMode, videoUrl, preview, liveSource, liveSession, stats, statsState, statsError, onRefreshStats, onNavigate }) {
+  const [selectedCameraId, setSelectedCameraId] = useState("cam-01");
+  const activeSourceCamera = useMemo(() => {
+    if (!taskId || (!liveSource && sourceMode !== "video")) return null;
+    const sourceId = liveSource?.source_id || taskId;
+    return {
+      id: `source-${sourceId}`,
+      code: sourceMode === "live" ? `LIVE-${sourceId.slice(0, 4).toUpperCase()}` : "UPLOAD-01",
+      name: sourceMode === "live" ? "Resolved live source" : "Uploaded recording",
+      location: liveSource?.source_type || "batch source",
+      state: taskStatus.status === "error" ? "attention" : liveSession?.status === "running" ? "online" : "standby",
+      speed: "-- km/h",
+      occupancy: "--",
+      lastSeen: "just now",
+      hourly: [],
+      directions: {},
+      counts: liveSession ? flattenLiveCounts(liveSession.counts) : sourceMode === "video" ? stats.vehicle_totals_by_type : {},
+      previewUrl: preview?.url || (liveSource?.preview_url ? apiUrl(liveSource.preview_url) : ""),
+      isSource: true,
+    };
+  }, [liveSession, liveSource, preview, sourceMode, stats.vehicle_totals_by_type, taskId, taskStatus.status]);
+
+  const cameras = useMemo(
+    () => activeSourceCamera ? [activeSourceCamera, ...CAMERA_PROFILES] : CAMERA_PROFILES,
+    [activeSourceCamera],
+  );
+
+  useEffect(() => {
+    if (activeSourceCamera) setSelectedCameraId(activeSourceCamera.id);
+  }, [activeSourceCamera]);
+
+  const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) || cameras[0];
+  const selectedCounts = selectedCamera.counts || {};
+  const selectedTotal = Object.values(selectedCounts).reduce((total, value) => total + Number(value || 0), 0);
+  const isActiveSource = Boolean(selectedCamera.isSource);
+  const liveFrameUrl = isActiveSource && liveSession?.session_id
+    ? apiUrl(`/live/sessions/${liveSession.session_id}/stream`)
+    : "";
+  const outputVideoUrl = isActiveSource && result?.outputs?.video_path ? apiUrl(result.outputs.video_path) : "";
+  const feedUrl = liveFrameUrl || selectedCamera.previewUrl || outputVideoUrl;
+  const runtimeLabel = liveSession?.status || (isActiveSource ? taskStatus.stage || taskStatus.status : selectedCamera.state);
+  const emptyFeed = !feedUrl;
 
   return (
-    <div className="subweb-page dashboard-home">
-      <div className="page-intro subweb-intro">
+    <div className="subweb-page dashboard-home camera-dashboard">
+      <div className="page-intro subweb-intro camera-dashboard-intro">
         <div>
-          <p className="eyebrow">00 / Operations overview</p>
-          <h2>Know what is happening before you start processing.</h2>
-          <p className="lede">Each workspace has one job: connect a source, define geometry, run inference, monitor a live session, or inspect diagnostics.</p>
+          <p className="eyebrow">00 / Camera operations</p>
+          <h2>See every vehicle as it moves.</h2>
+          <p className="lede">Monitor one camera, inspect detections, and read the traffic story without leaving the page.</p>
         </div>
-        <div className="intro-status">
-          <span className="status-dot" />
-          <div><strong>{currentState.replaceAll("_", " ")}</strong><small>{sourceMode === "live" ? "Live source selected" : "Recorded source mode"}</small></div>
+        <div className="camera-intro-actions">
+          <div className="intro-status"><span className="status-dot" /><div><strong>{runtimeLabel.replaceAll("_", " ")}</strong><small>{isActiveSource ? "Active source" : "Camera preview"}</small></div></div>
+          <button className="secondary-button" onClick={onRefreshStats} disabled={statsState === "loading"}><Icon name="restart" /> {statsState === "loading" ? "Refreshing…" : "Refresh data"}</button>
         </div>
       </div>
-      <div className="dashboard-toolbar">
-        <span className={`meta-pill stats-state-${statsState}`}>
-          <span className="live-indicator" />
-          {statsState === "loading" ? "Refreshing stats" : statsState === "error" ? "Stats unavailable" : "Fleet overview"}
-        </span>
-        <button className="secondary-button" onClick={onRefreshStats} disabled={statsState === "loading"}>
-          <Icon name="restart" /> {statsState === "loading" ? "Refreshing…" : "Refresh data"}
-        </button>
-      </div>
+      <section className="camera-selector" aria-labelledby="camera-selector-title">
+        <div className="camera-selector-heading">
+          <div><p className="eyebrow">Camera fleet</p><h3 id="camera-selector-title">Choose a camera to inspect</h3></div>
+          <span className={`meta-pill stats-state-${statsState}`}><span className="live-indicator" />{statsState === "error" ? "Stats unavailable" : "Synced just now"}</span>
+        </div>
+        <div className="camera-selector-list" role="listbox" aria-label="Available cameras">
+          {cameras.map((camera) => (
+            <button className={`camera-option ${selectedCamera.id === camera.id ? "selected" : ""}`} key={camera.id} role="option" aria-selected={selectedCamera.id === camera.id} onClick={() => setSelectedCameraId(camera.id)}>
+              <span className={`camera-option-dot state-${camera.state}`} />
+              <span className="camera-option-copy"><strong>{camera.code} <span>{camera.name}</span></strong><small><Icon name="location" /> {camera.location}</small></span>
+              <span className="camera-option-count">{camera.isSource ? "ACTIVE" : camera.state === "not_configured" ? "NOT CONNECTED" : `${Object.values(camera.counts).reduce((total, value) => total + Number(value || 0), 0)} today`}</span>
+            </button>
+          ))}
+        </div>
+      </section>
       {statsError && <div className="dashboard-data-alert" role="status"><Icon name="info" /><span>{statsError}</span></div>}
-      <div className="overview-grid" aria-label="Runtime overview">
-        <Metric label="Total jobs" value={stats.total_tasks} small />
-        <Metric label="Completed jobs" value={stats.completed_tasks} small />
-        <Metric label="Processing now" value={stats.processing_tasks} small />
-        <Metric label="Vehicles counted" value={vehicleTotal || result?.total_count || 0} small />
+      <div className="camera-command-grid">
+        <CameraFeed camera={selectedCamera} feedUrl={feedUrl} outputVideoUrl={outputVideoUrl} emptyFeed={emptyFeed} taskStatus={taskStatus} liveSession={liveSession} />
+        <CameraTelemetry camera={selectedCamera} total={selectedTotal} result={result} liveSession={liveSession} />
       </div>
-      {taskId && (
-        <section className="current-work panel-card" aria-labelledby="current-work-title">
-          <div>
-            <p className="eyebrow">Current work</p>
-            <h3 id="current-work-title">{sourceMode === "live" ? "Live source configuration" : "Batch task in the pipeline"}</h3>
-            <p className="hint-text">Task or source ID: <code>{taskId}</code></p>
-          </div>
-          <button className="secondary-button" onClick={() => onNavigate(sourceMode === "live" ? "live" : "runs")}>Open current workspace <Icon name="arrow_right" /></button>
-        </section>
-      )}
+      <div className="camera-analytics-grid">
+        <CameraVolumeChart camera={selectedCamera} />
+        <CameraDirectionPanel camera={selectedCamera} />
+      </div>
+      <section className="camera-bottom-row">
+        <div><p className="eyebrow">Camera workspace</p><h3>{selectedCamera.code} is selected</h3><p className="hint-text">Open Geometry or Live Monitor to change the feed configuration while keeping this camera's analytics view in context.</p></div>
+        <div className="button-row"><button className="secondary-button" onClick={() => onNavigate(isActiveSource && sourceMode === "live" ? "live" : isActiveSource ? "runs" : "sources")}><Icon name="arrow_right" /> {isActiveSource ? "Open active workspace" : "Connect this camera"}</button></div>
+      </section>
       <DashboardInsights stats={stats} statsState={statsState} />
-      <div className="module-grid">
-        {modules.map((module) => (
-          <section className="module-card" key={module.id}>
-            <div className="module-card-icon"><Icon name={module.icon} /></div>
-            <p className="eyebrow">{module.eyebrow}</p>
-            <h3>{module.title}</h3>
-            <p>{module.text}</p>
-            <button className="text-button" onClick={() => onNavigate(module.id)}>Open {module.title} <Icon name="arrow_right" /></button>
-          </section>
-        ))}
-      </div>
     </div>
   );
+}
+
+function CameraFeed({ camera, feedUrl, outputVideoUrl, emptyFeed, taskStatus, liveSession }) {
+  const feedLabel = liveSession?.status === "running" ? "INFERENCE ON" : outputVideoUrl ? "ANALYZED OUTPUT" : feedUrl ? "FRAME PREVIEW" : "NO LIVE FEED";
+  return (
+    <section className="camera-feed-panel" aria-labelledby="camera-feed-title">
+      <div className="camera-feed-header">
+        <div><p className="eyebrow">Live detection feed</p><h3 id="camera-feed-title">{camera.code} · {camera.name}</h3><span><Icon name="location" /> {camera.location}</span></div>
+        <div className="camera-feed-header-actions"><span className={`camera-live-pill ${camera.state === "online" ? "online" : ""}`}><span />{liveSession?.status === "running" ? "LIVE" : camera.state === "online" ? "MONITORING" : "STANDBY"}</span><button className="icon-button solid" aria-label="Expand camera feed" title="Expand camera feed"><Icon name="crop_free" /></button></div>
+      </div>
+      <div className={`camera-feed-stage ${emptyFeed ? "empty" : ""}`}>
+        {outputVideoUrl ? <video src={outputVideoUrl} autoPlay muted loop controls playsInline aria-label="Annotated detection output" /> : feedUrl ? <img src={feedUrl} alt={`${camera.name} traffic camera feed`} /> : <div className="camera-feed-empty"><Icon name="broadcast" /><strong>No live feed connected</strong><span>Resolve a live source and start inference to see annotated frames here.</span></div>}
+        <div className="camera-grid-overlay" aria-hidden="true" />
+        <div className="camera-feed-stamp"><span className="live-indicator" /> {feedLabel}</div>
+        <div className="camera-feed-timestamp">{liveSession?.updated_at ? `${formatAge(liveSession.updated_at)} ago` : feedUrl ? "source preview" : "awaiting source"} · {taskStatus.stage || "tracking"}</div>
+      </div>
+      <div className="camera-feed-footer"><span><strong>{camera.code}</strong> · {liveSession?.perf?.reader_output?.join("×") || "source size pending"}</span><span>{liveSession?.fps ? `${liveSession.fps} FPS` : "FPS --"}</span><span>Model: {liveSession?.model_name?.split("/").pop() || "not running"}</span></div>
+    </section>
+  );
+}
+
+function CameraTelemetry({ camera, total, result, liveSession }) {
+  const rows = Object.entries(camera.counts || {}).sort(([, left], [, right]) => right - left);
+  const max = Math.max(1, ...rows.map(([, value]) => Number(value || 0)));
+  return (
+    <aside className="camera-telemetry" aria-label={`${camera.code} statistics`}>
+      <div className="camera-telemetry-heading"><div><p className="eyebrow">Selected camera</p><h3>Traffic snapshot</h3></div><span className="meta-pill">Today</span></div>
+      <div className="camera-total"><strong>{liveSession?.lane_volume_total ?? result?.total_count ?? total}</strong><span>vehicles counted</span><small>{liveSession?.status === "running" ? "Updating from the live session" : "No live session running"}</small></div>
+      <div className="camera-metric-grid"><Metric label="Avg. speed" value={camera.speed} small /><Metric label="Road occupancy" value={camera.occupancy} small /><Metric label="Unique tracks" value={liveSession?.global_unique_count ?? result?.summary?.global_unique_count ?? "--"} small /><Metric label="Inference" value={liveSession?.perf?.infer_wall_ms ? `${liveSession.perf.infer_wall_ms} ms` : "--"} small /></div>
+      <div className="camera-class-breakdown"><div className="camera-section-label"><span>Vehicle classes</span><span>{rows.length} classes</span></div>{rows.map(([type, value]) => <div className="camera-class-row" key={type}><span className={`class-mark class-${type}`} /><span>{type}</span><div className="bar-track"><div style={{ width: `${Math.min(100, (Number(value || 0) / max) * 100)}%` }} /></div><strong>{value}</strong></div>)}</div>
+      <div className={`camera-health ${liveSession?.status === "failed" ? "error" : ""}`}><span className="status-dot" /><div><strong>{liveSession?.status === "running" ? "Detection pipeline healthy" : liveSession?.status === "failed" ? "Detection pipeline stopped" : "Awaiting live session"}</strong><small>{liveSession?.perf?.frame_age_ms != null ? `Frame age ${liveSession.perf.frame_age_ms} ms · ${formatAge(liveSession.updated_at)} ago` : "Connect a live source to populate runtime telemetry."}</small></div></div>
+    </aside>
+  );
+}
+
+function CameraVolumeChart({ camera }) {
+  const points = camera.hourly || [];
+  const max = Math.max(1, ...points);
+  const chartPoints = points.map((value, index) => `${(index / Math.max(1, points.length - 1)) * 100},${92 - (value / max) * 72}`).join(" ");
+  const areaPoints = `0,100 ${chartPoints} 100,100`;
+  if (!points.length) return <section className="camera-chart-card chart-empty" aria-labelledby="volume-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Hourly volume</p><h3 id="volume-chart-title">Traffic flow</h3></div></div><p className="hint-text">Live volume history will appear after the session collects data.</p></section>;
+  return (
+    <section className="camera-chart-card" aria-labelledby="volume-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Hourly volume</p><h3 id="volume-chart-title">Traffic flow</h3></div><span className="chart-legend"><i /> vehicles / hour</span></div><div className="volume-chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Hourly vehicle volume chart"><defs><linearGradient id="volume-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#356fe6" stopOpacity=".28" /><stop offset="1" stopColor="#356fe6" stopOpacity="0" /></linearGradient></defs><path d={`M ${areaPoints.replaceAll(" ", " L ")}`} fill="url(#volume-fill)" /><polyline points={chartPoints} fill="none" stroke="#356fe6" strokeWidth="2.2" vectorEffect="non-scaling-stroke" /></svg><div className="volume-chart-axis"><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span></div></div></section>
+  );
+}
+
+function CameraDirectionPanel({ camera }) {
+  const rows = Object.entries(camera.directions || {}).sort(([, left], [, right]) => right - left);
+  const max = Math.max(1, ...rows.map(([, value]) => value));
+  if (!rows.length) return <section className="camera-chart-card chart-empty" aria-labelledby="direction-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Directional flow</p><h3 id="direction-chart-title">Vehicles by direction</h3></div></div><p className="hint-text">Directional counts will appear when live geometry is active.</p></section>;
+  return <section className="camera-chart-card direction-card" aria-labelledby="direction-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Directional flow</p><h3 id="direction-chart-title">Vehicles by direction</h3></div><span className="meta-pill">Live window</span></div><div className="direction-list">{rows.map(([direction, value]) => <div className="direction-row" key={direction}><span>{direction}</span><div className="bar-track"><div style={{ width: `${(value / max) * 100}%` }} /></div><strong>{value}</strong></div>)}</div><div className="direction-note"><span className="status-dot" /><span>Counts are read from the selected live session.</span></div></section>;
 }
 
 function DashboardInsights({ stats, statsState }) {
@@ -1159,28 +1353,10 @@ function SettingsPanel({ settings, setSettings }) {
   );
 }
 
-function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog, onAlert }) {
+function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog, onAlert, liveSession, setLiveSession }) {
   const isLiveView = view === "live";
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
-  const [liveSession, setLiveSession] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
-  const liveSessionRef = useRef(null);
-
-  useEffect(() => {
-    liveSessionRef.current = liveSession;
-  }, [liveSession]);
-
-  useEffect(() => {
-    if (!isLiveView) return undefined;
-    return () => {
-      const sessionId = liveSessionRef.current?.session_id;
-      if (sessionId) {
-        removeLive(sessionId).catch(() => {
-          // The backend may already have removed a stopped/failed session.
-        });
-      }
-    };
-  }, [isLiveView]);
 
   useEffect(() => {
     if (isLiveView || !taskId) return undefined;
@@ -1222,28 +1398,6 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       setLiveUrl(liveSource.resolved_url || liveSource.source_url);
     }
   }, [isLiveView, liveSource]);
-
-  useEffect(() => {
-    if (!isLiveView || !liveSession?.session_id) return undefined;
-    let cancelled = false;
-    const interval = window.setInterval(async () => {
-      try {
-        const next = await fetchLiveSession(liveSession.session_id);
-        if (!cancelled && next) setLiveSession(next);
-      } catch (error) {
-        if (!cancelled) {
-          setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
-          appendLog(`live polling failed: ${error.message}`);
-          onAlert({ tone: "error", title: "Live session unavailable", message: error.message, action: "Stop or clear the session, then start it again when the API is healthy." });
-          window.clearInterval(interval);
-        }
-      }
-    }, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [appendLog, isLiveView, liveSession?.session_id, onAlert]);
 
   async function startLiveSession() {
     if (!liveUrl.trim() || !submittedConfig) return;
@@ -1527,6 +1681,7 @@ function Icon({ name }) {
     videocam: <><path d="m15 10 5-3v10l-5-3" /><rect x="3" y="6" width="12" height="12" rx="2" /></>,
     schema: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="15" width="6" height="6" rx="1" /><path d="M9 6h3a3 3 0 0 1 3 3v6" /></>,
     terminal: <><path d="m5 7 4 4-4 4" /><path d="M12 17h7" /></>,
+    location: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z" /><circle cx="12" cy="10" r="2.5" /></>,
     code: <><path d="m8 9-3 3 3 3" /><path d="m16 9 3 3-3 3" /><path d="m14 5-4 14" /></>,
     download: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>,
     table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M9 4v16M15 4v16" /></>,
@@ -1952,6 +2107,11 @@ function formatTaskDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function formatClock(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return "--:--:--";
+  return value.toLocaleTimeString(undefined, { hour12: false });
 }
 
 function resultToCsv(result, taskId) {

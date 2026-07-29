@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime
-from api.dependencies import require_database
+from shared.database import get_database
 from api.schemas.dashboard import DashboardStatsResponse, RecentTask
 
 router = APIRouter()
 
 @router.get("/stats", response_model=DashboardStatsResponse)
-async def get_dashboard_stats(db = Depends(require_database)):
+async def get_dashboard_stats(db = Depends(get_database)):
     """Aggregates metrics for the frontend control dashboard."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     # 1. Counts of tasks by status
     total_tasks = await db.tasks.count_documents({})
     completed_tasks = await db.tasks.count_documents({"status": {"$in": ["completed", "succeeded"]}})
@@ -27,11 +29,15 @@ async def get_dashboard_stats(db = Depends(require_database)):
         task_id = task.get("task_id") or task.get("video_id")
         if not task_id:
             continue
+        try:
+            progress = int(task.get("progress") or 0)
+        except (TypeError, ValueError):
+            progress = 0
         recent_tasks.append(
             RecentTask(
                 task_id=task_id,
                 status=task.get("status") or "unknown",
-                progress=int(task.get("progress") or 0),
+                progress=progress,
                 created_at=task.get("created_at") or task.get("updated_at") or datetime.utcnow(),
             )
         )

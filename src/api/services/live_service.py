@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -420,20 +421,23 @@ class LiveSessionState:
             # Do not expose signed googlevideo URLs to the browser or logs.
             "source_url": redact_url_credentials(self.source_origin_url or self.source_url),
             "status": self.status,
+            "updated_at": self.updated_at,
             "uptime_s": round(time.time() - self.created_at, 1),
             "frames_read": self.frames_read,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
             "fps": round(self.fps, 2),
             "last_error": self.last_error,
-            "counts": self.counts,
+            # Return detached snapshots so the worker thread cannot mutate
+            # objects while FastAPI is serializing a response.
+            "counts": copy.deepcopy(self.counts),
             "lane_volume_total": self.lane_volume_total,
             "global_unique_count": self.global_unique_count,
             "multi_lane_track_count": self.multi_lane_track_count,
-            "multi_lane_tracks": self.multi_lane_tracks,
-            "latest_tracks": self.latest_tracks[-20:],
-            "latest_debug": self.latest_debug,
-            "perf": self.perf,
+            "multi_lane_tracks": copy.deepcopy(self.multi_lane_tracks),
+            "latest_tracks": copy.deepcopy(self.latest_tracks[-20:]),
+            "latest_debug": copy.deepcopy(self.latest_debug),
+            "perf": copy.deepcopy(self.perf),
             "latest_frame_seq": self.latest_frame_seq,
             "model_name": self.model_name,
             "roi_mode": self.roi_mode,

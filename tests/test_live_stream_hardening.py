@@ -107,7 +107,21 @@ def test_live_session_snapshot_does_not_expose_signed_media_url():
     snapshot = session.snapshot()
 
     assert snapshot["source_url"] == "https://www.youtube.com/live/example"
+    assert snapshot["updated_at"] == session.updated_at
     assert "googlevideo" not in snapshot["source_url"]
+
+
+def test_live_session_snapshot_is_detached_from_worker_state():
+    session = LiveSessionState(session_id="copy", source_url="http://example.test/live.m3u8")
+    session.counts = {"lane-1": {"car": 1}}
+    session.latest_debug = {"lane_id": "lane-1"}
+
+    snapshot = session.snapshot()
+    snapshot["counts"]["lane-1"]["car"] = 99
+    snapshot["latest_debug"]["lane_id"] = "mutated"
+
+    assert session.counts["lane-1"]["car"] == 1
+    assert session.latest_debug["lane_id"] == "lane-1"
 
 
 def test_live_manager_cleanup_stale_terminal_sessions(monkeypatch):

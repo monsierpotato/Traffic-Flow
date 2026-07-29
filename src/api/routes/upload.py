@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Form
-from api.dependencies import require_database
+from shared.database import get_database
 from api.middleware.file_validator import validate_video_file
 from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.upload import UploadResponse
@@ -99,8 +99,10 @@ async def upload_chunk(
 @router.post("/video/chunk/{upload_id}/complete")
 async def complete_chunked_upload(
     upload_id: str,
-    db=Depends(require_database),
+    db=Depends(get_database),
 ):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     _validate_upload_id(upload_id)
     upload_dir = CHUNK_DIR / upload_id
     if not upload_dir.exists():
@@ -180,11 +182,13 @@ async def complete_chunked_upload(
 @router.post("/video", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_video(
     file: UploadFile = Depends(validate_video_file),
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Uploads video file, extracts first frame, saves both to Cloudflare R2,
     and initializes a task document in MongoDB.
     """
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     try:
         temp_path = await save_upload_to_temp(file)
         try:

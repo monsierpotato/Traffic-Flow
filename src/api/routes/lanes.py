@@ -1,6 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from api.dependencies import require_database
+from shared.database import get_database
 from api.schemas.lane import LaneConfigRequest, LaneConfigResponse
 
 router = APIRouter()
@@ -8,9 +8,11 @@ router = APIRouter()
 @router.post("/config", response_model=LaneConfigResponse, status_code=status.HTTP_200_OK)
 async def configure_lanes(
     payload: LaneConfigRequest,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Saves ROI and Lane configurations for a video."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     # 1. Verify that the video/task document exists
     task = await db.tasks.find_one({"video_id": payload.video_id})
     if not task:
@@ -73,9 +75,11 @@ async def configure_lanes(
 @router.get("/config/{video_id}", response_model=LaneConfigRequest, status_code=status.HTTP_200_OK)
 async def get_lane_config(
     video_id: str,
-    db = Depends(require_database)
+    db = Depends(get_database)
 ):
     """Retrieves the Lane configurations for a video (accepts video_id or task_id)."""
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not connected")
     lane_config = await db.lane_configs.find_one({
         "$or": [
             {"video_id": video_id},
