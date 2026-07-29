@@ -19,6 +19,7 @@ const env = {
   ...process.env,
   PYTHONPATH: resolve(root, "src"),
   AI_LOCAL: envValue("AI_LOCAL", "true"),
+  AI_SERVING_URL: envValue("AI_SERVING_URL", ""),
   CALLBACK_HOST: envValue("CALLBACK_HOST", "http://127.0.0.1:8000"),
   REDIS_URL: envValue("REDIS_URL", "redis://127.0.0.1:6379/0"),
   CELERY_QUEUE_NAME: envValue("CELERY_QUEUE_NAME", "trafficflow_gpu_queue"),
@@ -34,7 +35,9 @@ const commands = [
 ];
 
 const redisTarget = redisEndpoint(env.REDIS_URL);
-const workerRuntimeReady = existsSync(modelPath) && hasWorkerRuntime();
+const aiLocal = ["1", "true", "yes"].includes(env.AI_LOCAL.toLowerCase());
+const remoteInferenceConfigured = Boolean(env.AI_SERVING_URL && env.AI_SERVING_URL !== "local");
+const workerRuntimeReady = (!aiLocal || remoteInferenceConfigured) || (existsSync(modelPath) && hasWorkerRuntime());
 if (existsSync(celery) && workerRuntimeReady && await isPortOpen(redisTarget.host, redisTarget.port)) {
   commands.splice(1, 0, [
     "worker",
@@ -43,8 +46,8 @@ if (existsSync(celery) && workerRuntimeReady && await isPortOpen(redisTarget.hos
   ]);
 } else {
   const reasons = [];
-  if (!existsSync(modelPath)) reasons.push(`model missing at ${modelPath}`);
-  if (!hasWorkerRuntime()) reasons.push("torch/ultralytics unavailable");
+  if (aiLocal && !existsSync(modelPath) && !remoteInferenceConfigured) reasons.push(`model missing at ${modelPath}`);
+  if (aiLocal && !hasWorkerRuntime() && !remoteInferenceConfigured) reasons.push("torch/ultralytics unavailable");
   if (!existsSync(celery)) reasons.push("celery executable missing");
   if (!await isPortOpen(redisTarget.host, redisTarget.port)) reasons.push(`Redis unavailable at ${redisTarget.host}:${redisTarget.port}`);
   console.error(`[worker] BLOCKED: ${reasons.join("; ")}; API/frontend will run without batch worker.`);

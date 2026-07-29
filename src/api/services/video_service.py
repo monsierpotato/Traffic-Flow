@@ -34,29 +34,85 @@ def _ffprobe_stream_meta(path: str) -> dict:
         "ffprobe", "-v", "error",
         "-select_streams", "v:0",
         "-show_entries",
-        "stream=codec_name,pix_fmt,color_range,color_space,color_transfer,color_primaries",
+        "stream=width,height,avg_frame_rate,r_frame_rate,nb_frames,duration,"
+        "codec_name,pix_fmt,color_range,color_space,color_transfer,color_primaries:"
+        "format=duration",
         "-of", "json",
         path,
     ]
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
-        streams = json.loads(result.stdout or "{}").get("streams", [])
-        return streams[0] if streams else {}
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams", [])
+        if not streams:
+            return {}
+        stream = dict(streams[0])
+        format_duration = (payload.get("format") or {}).get("duration")
+        if not stream.get("duration") and format_duration:
+            stream["duration"] = format_duration
+        return stream
     except Exception as exc:
         logger.debug("ffprobe stream metadata unavailable for %s: %s", path, exc)
         return {}
 
 
-def _get_video_meta(path: str) -> VideoMeta:
+def _parse_rate(raw: str | None) -> float:
+    if not raw or raw == "0/0":
+        return 0.0
+    try:
+        if "/" in raw:
+            numerator, denominator = raw.split("/", 1)
+            denominator_value = float(denominator)
+            return float(numerator) / denominator_value if denominator_value else 0.0
+        return float(raw)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _opencv_video_meta(path: str) -> tuple[int, int, float, int]:
     cap = cv2.VideoCapture(path)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    nframes = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    cap.release()
+    try:
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        nframes = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        return w, h, fps, nframes
+    finally:
+        cap.release()
+
+
+def _get_video_meta(path: str) -> VideoMeta:
     size = os.path.getsize(path)
-    duration = nframes / fps if fps > 0 else 0.0
     stream = _ffprobe_stream_meta(path)
+    if stream:
+        w = int(stream.get("width") or 0)
+        h = int(stream.get("height") or 0)
+        fps = _parse_rate(stream.get("avg_frame_rate") or stream.get("r_frame_rate"))
+        nframes_raw = stream.get("nb_frames")
+        try:
+            nframes = int(float(nframes_raw)) if nframes_raw not in (None, "N/A") else 0
+        except (TypeError, ValueError):
+            nframes = 0
+        try:
+            duration = float(stream.get("duration") or 0.0)
+        except (TypeError, ValueError):
+            duration = 0.0
+    else:
+        w, h, fps, nframes = _opencv_video_meta(path)
+        duration = 0.0
+
+    # Some containers omit stream fields. Preserve the OpenCV fallback for
+    # those cases while the normal path needs only one ffprobe process.
+    if w <= 0 or h <= 0 or fps <= 0 or nframes <= 0:
+        fallback_w, fallback_h, fallback_fps, fallback_frames = _opencv_video_meta(path)
+        w = w or fallback_w
+        h = h or fallback_h
+        fps = fps or fallback_fps
+        nframes = nframes or fallback_frames
+    if w <= 0 or h <= 0:
+        raise ValueError("Could not read valid video dimensions")
+    fps = fps or 30.0
+    duration = duration or (nframes / fps if fps > 0 else 0.0)
     return VideoMeta(
         width=w,
         height=h,
@@ -81,6 +137,7 @@ def normalize_video_path(input_path: str | Path) -> Tuple[str, VideoMeta, VideoM
     t0 = time.perf_counter()
     input_path = str(input_path)
     temp_out_name = None
+    orig_meta = None
 
     try:
         orig_meta = _get_video_meta(input_path)
@@ -136,11 +193,13 @@ def normalize_video_path(input_path: str | Path) -> Tuple[str, VideoMeta, VideoM
         )
         return temp_out_name, orig_meta, working_meta, transcode_ms, True
 
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.error(f"FFmpeg transcode failed: {e}")
         if getattr(e, "stderr", None):
             logger.error("FFmpeg stderr: %s", e.stderr)
         # Fallback: return original
+        if orig_meta is None:
+            raise
         transcode_ms = (time.perf_counter() - t0) * 1000.0
         if temp_out_name and os.path.exists(temp_out_name):
             try:
@@ -270,8 +329,12 @@ def crop_video(video_bytes: bytes, bbox: tuple) -> bytes:
         raise e
     finally:
         if os.path.exists(temp_in.name):
-            try: os.unlink(temp_in.name)
-            except: pass
+            try:
+                os.unlink(temp_in.name)
+            except OSError:
+                pass
         if os.path.exists(temp_out_name):
-            try: os.unlink(temp_out_name)
-            except: pass
+            try:
+                os.unlink(temp_out_name)
+            except OSError:
+                pass

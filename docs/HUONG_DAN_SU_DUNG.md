@@ -35,7 +35,7 @@ inference và trả frame MJPEG cùng metrics theo session.
 | FFmpeg + FFprobe | Có trong PATH | Preview, normalize và live ingest |
 | Redis native | 6379 | Bắt buộc cho batch worker |
 | MongoDB | Tùy chọn | Có local JSON fallback cho development |
-| Model weights | Theo `AI_MODEL_PATH` | Không commit vào Git |
+| Model weights | Theo `AI_MODEL_PATH` | Cần cho local inference; có thể dùng remote fallback qua `AI_SERVING_URL`; không commit vào Git |
 | NVIDIA CUDA | Tùy chọn | Dùng GPU nếu environment hỗ trợ |
 
 ## Khởi động local
@@ -56,10 +56,11 @@ Mở:
 - API readiness: `http://127.0.0.1:8000/ready`
 - Swagger: `http://127.0.0.1:8000/docs`
 
-`npm run dev` khởi động API, Vite và worker khi Redis, Celery và model đã sẵn
-sàng. Nếu thiếu worker dependency, Redis hoặc model, API/frontend vẫn khởi động
-nhưng preflight báo `BLOCKED`; submit batch sẽ trả lỗi rõ ràng thay vì tạo task
-pending giả.
+`npm run dev` khởi động API, Vite và worker khi Redis, Celery và inference path
+đã sẵn sàng. Nếu thiếu Redis, API/frontend vẫn khởi động nhưng worker báo
+`BLOCKED`; submit batch sẽ trả lỗi rõ ràng thay vì tạo task pending giả. Local
+model/dependency có thể bỏ qua khi `AI_SERVING_URL` được cấu hình để dùng remote
+fallback.
 
 Các process riêng:
 
@@ -79,13 +80,18 @@ PYTHONPATH=src .venv/bin/python scripts/check_connections.py
 
 ```env
 AI_LOCAL=true
+AI_SERVING_URL=
 AI_MODEL_DIR=inference/models
 AI_MODEL_PATH=yolov8n.pt
 REDIS_URL=redis://127.0.0.1:6379/0
 CALLBACK_HOST=http://127.0.0.1:8000
+CALLBACK_TOKEN=
 MONGODB_LOCAL_FALLBACK=true
 LOCAL_DB_PATH=storage/local_db.json
 ```
+
+Khi deploy public, đặt `CALLBACK_TOKEN` là một chuỗi ngẫu nhiên dài để chỉ
+worker được phép ghi callback tiến độ.
 
 R2 dùng local filesystem khi credentials còn là placeholder. Khi dùng MongoDB
 Atlas hoặc R2 thật, chỉ khai báo secret trong `.env`, không đưa vào repository.

@@ -6,7 +6,7 @@ class RecentTask(BaseModel):
     task_id: str
     status: str
     progress: int
-    created_at: datetime
+    created_at: datetime | None = None
 
 class DashboardStatsResponse(BaseModel):
     total_tasks: int

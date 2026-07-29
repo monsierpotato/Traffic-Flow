@@ -14,8 +14,15 @@ os.environ.setdefault("R2_PUBLIC_URL", "http://localhost:8000/static/previews")
 os.environ.setdefault("AI_SERVING_URL", "https://example.com")
 
 import time
+import numpy as np
 
-from api.services.live_service import FfmpegLatestFrameReader, FramePacer, _normalize_even_crop_rect
+from api.services.live_service import (
+    FfmpegLatestFrameReader,
+    FramePacer,
+    LiveSessionManager,
+    LiveSessionState,
+    _normalize_even_crop_rect,
+)
 from worker.pipeline.tracker import LocalTracker
 
 
@@ -44,6 +51,18 @@ def test_raw_reader_joins_short_pipe_reads_into_one_frame():
     reader._proc = _Process(_ShortReadPipe(b"abcdefgh", chunk_size=3))
 
     assert reader._read_exact(8) == b"abcdefgh"
+
+
+def test_latest_reader_hands_off_frame_without_copying():
+    reader = FfmpegLatestFrameReader("unused")
+    frame = np.zeros((2, 3, 3), dtype=np.uint8)
+    reader._latest_frame = frame
+    reader._latest_seq = 1
+
+    ok, item = reader.read_item(timeout=0)
+
+    assert ok is True
+    assert item.frame is frame
 
 
 def test_crop_is_clipped_and_forced_to_even_dimensions():
@@ -76,3 +95,79 @@ def test_live_tracker_expires_lost_track_by_elapsed_time():
     tracker.update([{"bbox_xyxy": [0, 0, 50, 50], "class_name": "car"}], timestamp=10.0)
 
     assert tracker.update([], timestamp=10.8) == []
+
+
+def test_live_session_snapshot_does_not_expose_signed_media_url():
+    session = LiveSessionState(
+        session_id="session",
+        source_url="https://manifest.googlevideo.com/video.m3u8?expire=9999&sig=secret",
+        source_origin_url="https://www.youtube.com/live/example",
+    )
+
+    snapshot = session.snapshot()
+
+    assert snapshot["source_url"] == "https://www.youtube.com/live/example"
+    assert snapshot["updated_at"] == session.updated_at
+    assert "googlevideo" not in snapshot["source_url"]
+
+
+def test_live_session_snapshot_is_detached_from_worker_state():
+    session = LiveSessionState(session_id="copy", source_url="http://example.test/live.m3u8")
+    session.counts = {"lane-1": {"car": 1}}
+    session.latest_debug = {"lane_id": "lane-1"}
+
+    snapshot = session.snapshot()
+    snapshot["counts"]["lane-1"]["car"] = 99
+    snapshot["latest_debug"]["lane_id"] = "mutated"
+
+    assert session.counts["lane-1"]["car"] == 1
+    assert session.latest_debug["lane_id"] == "lane-1"
+
+
+def test_live_manager_cleanup_stale_terminal_sessions(monkeypatch):
+    manager = LiveSessionManager()
+    session = LiveSessionState(session_id="old", source_url="http://example.test/live.m3u8")
+    session.status = "ended"
+    session.updated_at = 1.0
+    manager._sessions[session.session_id] = session
+    monkeypatch.setattr("api.services.live_service.time.time", lambda: 10000.0)
+
+    assert manager.cleanup_stale() == 1
+    assert manager.get("old") is None
+
+
+def test_live_remove_keeps_running_thread_registered_until_it_stops():
+    from types import SimpleNamespace
+
+    manager = LiveSessionManager()
+    session = LiveSessionState(session_id="active", source_url="http://example.test/live.m3u8")
+    session.status = "running"
+    thread = SimpleNamespace(is_alive=lambda: True)
+    session.thread = thread
+    manager._sessions[session.session_id] = session
+
+    assert manager.remove(session.session_id) is True
+    assert manager.get(session.session_id) is session
+    assert session.status == "stopping"
+
+    thread.is_alive = lambda: False
+    assert manager.remove(session.session_id) is True
+    assert manager.get(session.session_id) is None
+
+
+def test_live_manager_enforces_session_limit_atomically(monkeypatch):
+    from shared.config import settings
+    from api.services.live_service import LiveSessionLimitError
+
+    manager = LiveSessionManager()
+    existing = LiveSessionState(session_id="existing", source_url="http://example.test/live.m3u8")
+    existing.status = "running"
+    manager._sessions[existing.session_id] = existing
+    monkeypatch.setattr(settings, "LIVE_MAX_SESSIONS", 1)
+
+    try:
+        manager.create("http://example.test/next.m3u8", {})
+    except LiveSessionLimitError:
+        pass
+    else:
+        raise AssertionError("expected live session limit to reject the new session")

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     YTDLP_COOKIES_FILE: str = Field(default="")
     YTDLP_JS_RUNTIME: str = Field(default="")
     YTDLP_REMOTE_COMPONENTS: str = Field(default="")
+    YTDLP_TIMEOUT_SECONDS: int = Field(default=45, ge=5, le=300)
+    YTDLP_REFRESH_MARGIN_SECONDS: int = Field(default=120, ge=0, le=3600)
 
     # Live stream ingest configuration
     LIVE_READER_BACKEND: str = Field(default="auto")  # auto | ffmpeg | opencv
@@ -37,6 +39,7 @@ class Settings(BaseSettings):
     LIVE_FFMPEG_RW_TIMEOUT_US: int = Field(default=10000000)
     LIVE_FFMPEG_OUTPUT_FPS: int = Field(default=15)
     LIVE_FFMPEG_REALTIME_PACING: bool = Field(default=True)
+    LIVE_STREAM_POLL_INTERVAL_SECONDS: float = Field(default=0.033, gt=0, le=1)
     LIVE_FRAME_QUEUE_SIZE: int = Field(default=1, ge=1, le=1)
     LIVE_MAX_FRAME_AGE_SECONDS: float = Field(default=0.25, gt=0)
     LIVE_TRACK_MIN_HITS: int = Field(default=3, ge=1)
@@ -44,6 +47,11 @@ class Settings(BaseSettings):
     LIVE_TRACK_RESET_GAP_SECONDS: float = Field(default=1.0, gt=0)
     LIVE_RECONNECT_ATTEMPTS: int = Field(default=3, ge=0)
     LIVE_RECONNECT_DELAY_SECONDS: float = Field(default=1.0, ge=0)
+    LIVE_PREVIEW_TIMEOUT_SECONDS: int = Field(default=20, ge=5, le=120)
+    LIVE_SOURCE_TTL_SECONDS: int = Field(default=3600, ge=60)
+    LIVE_SESSION_RETENTION_SECONDS: int = Field(default=600, ge=30)
+    LIVE_MAX_SESSIONS: int = Field(default=2, ge=1, le=32)
+    LIVE_BLOCK_PRIVATE_HOSTS: bool = Field(default=True)
 
     # Cloudflare R2 configurations
     R2_ACCOUNT_ID: str = Field(default="placeholder_account_id")

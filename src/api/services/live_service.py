@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -15,13 +16,14 @@ import cv2
 import numpy as np
 
 from shared.config import settings
-from worker.pipeline.ai_client import InferenceClient
-from worker.pipeline.local_client import LocalInferenceClient
+from shared.safe_errors import redact_url_credentials, safe_error_message
+from worker.pipeline.inference_factory import build_inference_client
 from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space, shift_points_to_crop
 from worker.pipeline.renderer import FrameRenderer
 from worker.pipeline.detection_filter import filter_detections_for_tracking
 from worker.pipeline.tracker import LocalTracker
 from worker.services.counting_service import CountingState
+from api.services.youtube_resolver import media_url_needs_refresh, redact_process_detail, resolve_youtube_url
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,19 @@ class OpenCvFrameReader:
         self.frames_read = 0
 
     def open(self) -> None:
-        self.cap = cv2.VideoCapture(self.source_url)
+        self.cap = cv2.VideoCapture()
+        # These properties are honored by FFmpeg-backed OpenCV builds and
+        # prevent the fallback reader from waiting forever on a dead source.
+        for prop, value in (
+            (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None), 10_000),
+            (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None), 1_000),
+        ):
+            if prop is not None:
+                try:
+                    self.cap.set(prop, value)
+                except Exception:
+                    pass
+        self.cap.open(self.source_url)
         if not self.cap.isOpened():
             raise RuntimeError("Could not open live source with OpenCV")
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
@@ -103,9 +117,15 @@ class OpenCvFrameReader:
 
 
 class FfmpegLatestFrameReader:
-    def __init__(self, source_url: str, crop_rect: Optional[tuple[int, int, int, int]] = None):
+    def __init__(
+        self,
+        source_url: str,
+        crop_rect: Optional[tuple[int, int, int, int]] = None,
+        source_meta: Optional[tuple[int, int, float]] = None,
+    ):
         self.source_url = source_url
         self.crop_rect = crop_rect
+        self.source_meta = source_meta
         self.width = 0
         self.height = 0
         self.source_width = 0
@@ -125,7 +145,10 @@ class FfmpegLatestFrameReader:
         self._last_error = None
 
     def open(self) -> None:
-        self.source_width, self.source_height, self.fps = _probe_live_source(self.source_url)
+        if self.source_meta:
+            self.source_width, self.source_height, self.fps = self.source_meta
+        else:
+            self.source_width, self.source_height, self.fps = _probe_live_source(self.source_url)
         self.width, self.height = self.source_width, self.source_height
         vf = []
         if self.crop_rect:
@@ -193,9 +216,7 @@ class FfmpegLatestFrameReader:
             if self._proc.poll() is not None:
                 break
         self.release()
-        raise RuntimeError(
-            f"Could not read first frame with FFmpeg for {self.source_url} (stderr suppressed)."
-        )
+        raise RuntimeError("Could not read the first frame with FFmpeg")
 
     def read(self, timeout: float = 1.0):
         ok, item = self.read_item(timeout=timeout)
@@ -214,11 +235,12 @@ class FfmpegLatestFrameReader:
             if self._latest_frame is None:
                 return False, None
             self._last_delivered_seq = self._latest_seq
-            # Reader and consumer run on separate threads.  Hand out an owned
-            # ndarray so downstream preprocessing/rendering cannot mutate the
-            # producer's latest frame.
+            # The producer publishes a new ndarray for every frame and never
+            # mutates an array after publication. The consumer therefore owns
+            # this reference; copying a full 1080p frame here only adds memory
+            # bandwidth and extends the producer's condition-lock hold time.
             return True, LiveFrameItem(
-                frame=self._latest_frame.copy(),
+                frame=self._latest_frame,
                 captured_at=self._latest_timestamp,
                 seq=self._latest_seq,
                 interarrival_ms=self._latest_interarrival_ms,
@@ -243,12 +265,10 @@ class FfmpegLatestFrameReader:
         assert self._proc is not None and self._proc.stdout is not None
         pacer = FramePacer(pacing_fps) if settings.LIVE_FFMPEG_REALTIME_PACING else None
         last_capture_ts: Optional[float] = None
+        raw_buffer = bytearray(frame_size)
         while not self._stop.is_set():
-            raw = self._read_exact(frame_size)
-            if raw is None:
+            if not self._read_exact_into(raw_buffer):
                 break
-            if len(raw) != frame_size:
-                continue
             if pacer:
                 pacer.wait()
             captured_at = time.monotonic()
@@ -256,7 +276,10 @@ class FfmpegLatestFrameReader:
                 (captured_at - last_capture_ts) * 1000.0 if last_capture_ts is not None else 0.0
             )
             last_capture_ts = captured_at
-            frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
+            # One copy is required to detach the ndarray from the reusable
+            # pipe buffer. Avoid the previous bytearray -> bytes -> ndarray
+            # copy chain and keep the latest-frame slot immutable after handoff.
+            frame = np.frombuffer(raw_buffer, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
             with self._cond:
                 self.frames_read += 1
                 self._latest_seq += 1
@@ -268,19 +291,23 @@ class FfmpegLatestFrameReader:
         with self._cond:
             self._cond.notify_all()
 
-    def _read_exact(self, size: int) -> Optional[bytes]:
+    def _read_exact(self, size: int) -> Optional[bytearray]:
         """Read one complete raw BGR frame; pipe reads may be short."""
-        if size <= 0 or self._proc is None or self._proc.stdout is None:
-            return None
         buffer = bytearray(size)
+        return buffer if self._read_exact_into(buffer) else None
+
+    def _read_exact_into(self, buffer: bytearray) -> bool:
+        """Fill a reusable buffer because pipe reads may be short."""
+        if not buffer or self._proc is None or self._proc.stdout is None:
+            return False
         view = memoryview(buffer)
         offset = 0
-        while offset < size and not self._stop.is_set():
+        while offset < len(buffer) and not self._stop.is_set():
             count = self._proc.stdout.readinto(view[offset:])
             if not count:
-                return None
+                return False
             offset += count
-        return bytes(buffer) if offset == size else None
+        return offset == len(buffer)
 
     def _read_stderr_tail(self) -> str:
         try:
@@ -303,7 +330,8 @@ def _probe_live_source(source_url: str) -> tuple[int, int, float]:
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=settings.LIVE_FFPROBE_TIMEOUT_S)
     if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {result.stderr.strip()}")
+        detail = redact_process_detail(result.stderr)
+        raise RuntimeError(f"ffprobe failed: {detail or 'source probe returned a non-zero status'}")
     payload = json.loads(result.stdout or "{}")
     streams = payload.get("streams") or []
     if not streams:
@@ -326,11 +354,19 @@ def _parse_fps(raw: str | None) -> float:
     return float(raw)
 
 
-def _open_live_reader(source_url: str, crop_rect: Optional[tuple[int, int, int, int]] = None):
+def _open_live_reader(
+    source_url: str,
+    crop_rect: Optional[tuple[int, int, int, int]] = None,
+    source_meta: Optional[tuple[int, int, float]] = None,
+):
     prefer = os.environ.get("LIVE_FRAME_READER", settings.LIVE_READER_BACKEND).lower()
     if prefer in ("auto", "ffmpeg"):
         try:
-            reader = FfmpegLatestFrameReader(source_url, crop_rect=crop_rect)
+            reader = FfmpegLatestFrameReader(
+                source_url,
+                crop_rect=crop_rect,
+                source_meta=source_meta,
+            )
             reader.open()
             logger.info(
                 "Live source opened with FFmpeg latest-frame reader: output=%sx%s cropped=%s",
@@ -353,6 +389,8 @@ def _open_live_reader(source_url: str, crop_rect: Optional[tuple[int, int, int, 
 class LiveSessionState:
     session_id: str
     source_url: str
+    source_origin_url: Optional[str] = None
+    source_expires_at: Optional[float] = None
     status: str = "starting"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -380,22 +418,26 @@ class LiveSessionState:
     def snapshot(self) -> dict:
         return {
             "session_id": self.session_id,
-            "source_url": self.source_url,
+            # Do not expose signed googlevideo URLs to the browser or logs.
+            "source_url": redact_url_credentials(self.source_origin_url or self.source_url),
             "status": self.status,
+            "updated_at": self.updated_at,
             "uptime_s": round(time.time() - self.created_at, 1),
             "frames_read": self.frames_read,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
             "fps": round(self.fps, 2),
             "last_error": self.last_error,
-            "counts": self.counts,
+            # Return detached snapshots so the worker thread cannot mutate
+            # objects while FastAPI is serializing a response.
+            "counts": copy.deepcopy(self.counts),
             "lane_volume_total": self.lane_volume_total,
             "global_unique_count": self.global_unique_count,
             "multi_lane_track_count": self.multi_lane_track_count,
-            "multi_lane_tracks": self.multi_lane_tracks,
-            "latest_tracks": self.latest_tracks[-20:],
-            "latest_debug": self.latest_debug,
-            "perf": self.perf,
+            "multi_lane_tracks": copy.deepcopy(self.multi_lane_tracks),
+            "latest_tracks": copy.deepcopy(self.latest_tracks[-20:]),
+            "latest_debug": copy.deepcopy(self.latest_debug),
+            "perf": copy.deepcopy(self.perf),
             "latest_frame_seq": self.latest_frame_seq,
             "model_name": self.model_name,
             "roi_mode": self.roi_mode,
@@ -403,20 +445,42 @@ class LiveSessionState:
         }
 
 
+class LiveSessionLimitError(RuntimeError):
+    """Raised when the process has reached its configured live-session cap."""
+
+
 class LiveSessionManager:
     def __init__(self):
         self._sessions: Dict[str, LiveSessionState] = {}
         self._lock = threading.Lock()
 
-    def create(self, source_url: str, lane_config: Optional[dict], frame_skip: int = 1) -> LiveSessionState:
-        session = LiveSessionState(session_id=str(uuid.uuid4()), source_url=source_url)
-        with self._lock:
-            self._sessions[session.session_id] = session
+    def create(
+        self,
+        source_url: str,
+        lane_config: Optional[dict],
+        frame_skip: int = 1,
+        source_origin_url: Optional[str] = None,
+        source_expires_at: Optional[float] = None,
+    ) -> LiveSessionState:
+        session = LiveSessionState(
+            session_id=str(uuid.uuid4()),
+            source_url=source_url,
+            source_origin_url=source_origin_url,
+            source_expires_at=source_expires_at,
+        )
         session.thread = threading.Thread(
             target=self._run_session,
             args=(session, lane_config or {}, max(1, frame_skip)),
             daemon=True,
         )
+        with self._lock:
+            active_count = sum(
+                session.status in {"starting", "running", "stopping"}
+                for session in self._sessions.values()
+            )
+            if active_count >= settings.LIVE_MAX_SESSIONS:
+                raise LiveSessionLimitError("Maximum number of concurrent live sessions reached")
+            self._sessions[session.session_id] = session
         session.thread.start()
         return session
 
@@ -427,6 +491,22 @@ class LiveSessionManager:
     def list(self) -> list[LiveSessionState]:
         with self._lock:
             return list(self._sessions.values())
+
+    def cleanup_stale(self) -> int:
+        """Remove terminal sessions after their metrics retention window."""
+        cutoff = time.time() - settings.LIVE_SESSION_RETENTION_SECONDS
+        removed = 0
+        with self._lock:
+            for session_id, session in list(self._sessions.items()):
+                if session.status not in {"stopped", "failed", "ended"}:
+                    continue
+                if session.updated_at >= cutoff:
+                    continue
+                if session.thread and session.thread.is_alive():
+                    continue
+                self._sessions.pop(session_id, None)
+                removed += 1
+        return removed
 
     def stop(self, session_id: str) -> bool:
         session = self.get(session_id)
@@ -439,25 +519,33 @@ class LiveSessionManager:
 
     def remove(self, session_id: str) -> bool:
         with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if not session:
-            return False
-        session.stop_event.set()
-        session.status = "stopping"
-        session.updated_at = time.time()
+            session = self._sessions.get(session_id)
+            if not session:
+                return False
+            session.stop_event.set()
+            session.status = "stopping"
+            session.updated_at = time.time()
+            if not session.thread or not session.thread.is_alive():
+                self._sessions.pop(session_id, None)
         return True
 
     def _run_session(self, session: LiveSessionState, lane_config: dict, frame_skip: int) -> None:
         cap = None
         ai_client = None
         try:
+            if session.source_origin_url and media_url_needs_refresh(session.source_expires_at):
+                refreshed = resolve_youtube_url(session.source_origin_url)
+                session.source_url = refreshed.url
+                session.source_expires_at = refreshed.expires_at
             requested_roi_mode = lane_config.get("roi_mode") or os.environ.get("LIVE_ROI_MODE") or settings.ROI_MODE
             processing_roi = lane_config.get("crop_rect_padded") or lane_config.get("processing_roi") or lane_config.get("annotation_roi")
             source_width = 0
             source_height = 0
             source_fps = 25.0
+            source_meta = None
             try:
                 source_width, source_height, source_fps = _probe_live_source(session.source_url)
+                source_meta = (source_width, source_height, source_fps)
             except Exception as exc:
                 logger.warning("Could not probe live source before open; disabling FFmpeg crop-in-reader: %s", exc)
 
@@ -481,7 +569,11 @@ class LiveSessionManager:
                 out_w, out_h = width, height
             live_roi_mode = requested_roi_mode if use_detection_crop else "full_frame"
 
-            cap = _open_live_reader(session.source_url, crop_rect if use_detection_crop else None)
+            cap = _open_live_reader(
+                session.source_url,
+                crop_rect if use_detection_crop else None,
+                source_meta=source_meta,
+            )
             reader_cropped = bool(getattr(cap, "cropped_in_reader", False))
             if width <= 0 or height <= 0:
                 width = int(getattr(cap, "source_width", 0) or cap.width or 0)
@@ -489,9 +581,8 @@ class LiveSessionManager:
                 out_w, out_h = int(cap.width or width), int(cap.height or height)
             source_fps = cap.fps or source_fps
             logger.info(
-                "Live source opened: session=%s source=%s source=%sx%s output=%sx%s @ %.2f crop_in_reader=%s",
+                "Live source opened: session=%s source=%sx%s output=%sx%s @ %.2f crop_in_reader=%s",
                 session.session_id,
-                session.source_url,
                 width,
                 height,
                 int(cap.width or out_w),
@@ -546,12 +637,9 @@ class LiveSessionManager:
                 min_hits=settings.LIVE_TRACK_MIN_HITS,
                 max_lost_seconds=settings.LIVE_TRACK_MAX_LOST_SECONDS,
             )
-            counter = CountingState(lanes_processing) if lanes_processing else None
+            counter = CountingState(lanes_processing, settings=lane_config.get("settings")) if lanes_processing else None
             session.counts = _empty_counts(lanes_processing or [])
-            if settings.AI_LOCAL or settings.AI_SERVING_URL == "local":
-                ai_client = LocalInferenceClient(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
-            else:
-                ai_client = InferenceClient(base_url=settings.AI_SERVING_URL, max_workers=1, request_timeout=30)
+            ai_client = build_inference_client(max_workers=1, imgsz=settings.ROI_INPUT_SIZE)
             ai_client.create_session()
             logger.info(
                 "Live inference ready: session=%s client=%s frame_skip=%s crop=%s lanes=%s",
@@ -567,6 +655,7 @@ class LiveSessionManager:
             last_tick = time.time()
             last_processed = 0
             frame_idx = 0
+            last_reader_seq = None
             session.model_name = settings.resolved_model_path()
             session.roi_mode = live_roi_mode
             session.ai_imgsz = settings.AI_IMGSZ
@@ -576,7 +665,7 @@ class LiveSessionManager:
                 nonlocal counter, last_tracking_ts
                 logger.warning("Resetting live runtime state: session=%s reason=%s", session.session_id, reason)
                 tracker.reset()
-                counter = CountingState(lanes_processing) if lanes_processing else None
+                counter = CountingState(lanes_processing, settings=lane_config.get("settings")) if lanes_processing else None
                 session.counts = _empty_counts(lanes_processing or [])
                 session.lane_volume_total = 0
                 session.global_unique_count = 0
@@ -665,7 +754,7 @@ class LiveSessionManager:
 
                 render_start = time.perf_counter()
                 annotated = renderer.draw(
-                    cropped.copy(),
+                    cropped,
                     enriched,
                     session.latest_debug if settings.RENDER_DEBUG else None,
                 )
@@ -746,6 +835,15 @@ class LiveSessionManager:
                             session.stop_event.wait(settings.LIVE_RECONNECT_DELAY_SECONDS)
                         if session.stop_event.is_set():
                             break
+                        if session.source_origin_url:
+                            refreshed = resolve_youtube_url(session.source_origin_url)
+                            session.source_url = refreshed.url
+                            session.source_expires_at = refreshed.expires_at
+                            logger.info(
+                                "Refreshed YouTube media URL before reconnect: session=%s expires_at=%s",
+                                session.session_id,
+                                refreshed.expires_at,
+                            )
                         replacement = _open_live_reader(session.source_url, crop_rect if use_detection_crop else None)
                         replacement_size = (int(replacement.width or 0), int(replacement.height or 0))
                         expected_size = (int(out_w), int(out_h))
@@ -762,6 +860,13 @@ class LiveSessionManager:
                     continue
                 reconnect_attempts = 0
                 session.frames_read = max(session.frames_read + 1, getattr(cap, "frames_read", session.frames_read + 1))
+
+                # The FFmpeg reader intentionally keeps only the newest frame.
+                # Count overwritten sequence numbers so telemetry reflects the
+                # real drop pressure instead of only explicit frame skipping.
+                if last_reader_seq is not None and item.seq > last_reader_seq + 1:
+                    session.frames_dropped += item.seq - last_reader_seq - 1
+                last_reader_seq = item.seq
 
                 if frame_idx % frame_skip == 0:
                     process_frame(item, reader_wait_ms)
@@ -782,7 +887,7 @@ class LiveSessionManager:
         except Exception as exc:
             logger.exception("Live session failed: %s", exc)
             session.status = "failed"
-            session.last_error = str(exc)
+            session.last_error = safe_error_message(exc)
         finally:
             session.updated_at = time.time()
             if cap is not None:

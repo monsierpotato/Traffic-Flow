@@ -2,52 +2,34 @@
 
 import logging
 import os
-import tempfile
 from pathlib import Path
-from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from shared.database import get_database
 from shared.config import settings
 from api.middleware.file_validator import validate_video_file
-from api.services.upload_service import create_uploaded_video_task_from_path
+from api.services.upload_service import create_uploaded_video_task_from_path, save_upload_to_temp
 from api.schemas.task import TaskCreateRequest
-from api.routes.tasks import process_task, get_task_status, get_task_result
+from api.schemas.lane import LaneConfigRequest
+from api.routes.tasks import find_task, process_task, get_task_status, get_task_result
+from api.routes.lanes import configure_lanes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-async def _save_upload_to_temp(file: UploadFile) -> str:
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "video.mp4").suffix or ".mp4")
-    try:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            temp_file.write(chunk)
-        temp_file.close()
-        return temp_file.name
-    except Exception:
-        temp_file.close()
-        if os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
-        raise
-
-
 @router.post("/videos")
-async def compat_upload(request: Request, file: UploadFile = File(...)):
+async def compat_upload(file: UploadFile = File(...)):
     file = validate_video_file(file)
     db = get_database()
     if db is None:
         raise HTTPException(503, "Database not connected")
 
-    temp_path = await _save_upload_to_temp(file)
+    temp_path = await save_upload_to_temp(file)
     try:
         uploaded = await create_uploaded_video_task_from_path(
-            request=request,
             db=db,
             video_path=temp_path,
             content_type=file.content_type or "video/mp4",
@@ -57,7 +39,10 @@ async def compat_upload(request: Request, file: UploadFile = File(...)):
             os.unlink(temp_path)
 
     return {
-        "task_id": uploaded.video_id,
+        # Keep the resource identifiers distinct. Older clients used video_id
+        # as task_id, which made the adapter appear to work while hiding ID
+        # mismatches between the API, database, and Celery worker.
+        "task_id": uploaded.task_id,
         "video_id": uploaded.video_id,
         "status": "uploaded",
         "preview_url": uploaded.preview_url,
@@ -69,46 +54,60 @@ async def compat_upload(request: Request, file: UploadFile = File(...)):
 
 @router.get("/videos/{task_id}/preview")
 async def compat_preview(task_id: str):
-    preview = Path(settings.STORAGE_DIR) / "previews" / f"{task_id}.jpg"
+    db = get_database()
+    if db is None:
+        raise HTTPException(503, "Database not connected")
+    task = await find_task(db, task_id)
+    video_id = task.get("video_id") if task else task_id
+    preview = Path(settings.STORAGE_DIR) / "previews" / f"{video_id}.jpg"
     if preview.exists():
         return FileResponse(str(preview), media_type="image/jpeg")
+    if task and task.get("preview_url"):
+        return RedirectResponse(task["preview_url"], status_code=307)
     raise HTTPException(404, "Preview not found")
 
 
 @router.post("/tasks")
 async def compat_submit(request: Request, payload: dict):
-    import traceback
-    video_id = payload.get("task_id") or payload.get("video_id", "")
+    identifier = payload.get("task_id") or payload.get("video_id", "")
     lane_config = payload.get("lane_config")
 
-    if not video_id:
+    if not identifier:
         raise HTTPException(400, "task_id or video_id required")
     db = get_database()
     if db is None:
         raise HTTPException(503, "Database not connected")
 
     # Check if task exists
-    task = await db.tasks.find_one({"video_id": video_id})
+    task = await find_task(db, identifier)
     if not task:
-        raise HTTPException(404, f"No upload session found for {video_id}")
+        raise HTTPException(404, f"No upload session found for {identifier}")
 
-    task_id = task["task_id"]
+    task_id = task.get("task_id")
+    if not task_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Legacy upload has no canonical task_id and cannot be processed.",
+        )
+    video_id = task.get("video_id") or identifier
 
     # Save lane config if provided by frontend
     if lane_config:
+        if not isinstance(lane_config, dict):
+            raise HTTPException(status_code=422, detail="Invalid lane configuration")
         cfg = dict(lane_config)
         cfg["video_id"] = video_id
-        cfg["task_id"] = task_id
-        cfg["created_at"] = datetime.utcnow()
-        await db.lane_configs.update_one(
-            {"video_id": video_id},
-            {"$set": cfg},
-            upsert=True,
-        )
-        await db.tasks.update_one(
-            {"task_id": task_id},
-            {"$set": {"status": "configured", "updated_at": datetime.utcnow()}},
-        )
+        try:
+            # The compatibility endpoint receives an untyped JSON body, so it
+            # must apply the same contract as /api/v1/lanes/config before the
+            # document can reach the worker.
+            validated_cfg = LaneConfigRequest.model_validate(cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Invalid lane configuration") from exc
+
+        # Reuse the canonical route so compatibility clients cannot bypass
+        # task-state validation and reopen an active/terminal task.
+        await configure_lanes(validated_cfg, db=db)
 
     try:
         req = TaskCreateRequest(video_id=video_id)
@@ -117,8 +116,8 @@ async def compat_submit(request: Request, payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(500, f"Process failed: {e}")
+        logger.exception("Compatibility task submission failed")
+        raise HTTPException(500, "Process failed while submitting the task") from e
 
 
 @router.get("/tasks/{task_id}")
@@ -137,7 +136,6 @@ async def compat_status(task_id: str):
 
 @router.get("/tasks/{task_id}/result")
 async def compat_result(task_id: str):
-    import traceback
     from shared.database import get_database
     db = get_database()
     if db is None:
@@ -171,6 +169,5 @@ async def compat_result(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        tb = traceback.format_exc()
-        logger.error(tb)
-        raise HTTPException(500, f"Result failed: {e}")
+        logger.exception("Compatibility result lookup failed")
+        raise HTTPException(500, "Result could not be loaded") from e

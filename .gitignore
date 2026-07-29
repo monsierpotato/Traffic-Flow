@@ -47,3 +47,6 @@ weights/
 
 # Node
 node_modules/
+
+# Runtime-generated local storage and upload chunks
+storage/

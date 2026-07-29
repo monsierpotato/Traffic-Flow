@@ -4,10 +4,12 @@ import {
   apiRequest,
   apiUrl,
   normalizeAnalyticsResult,
+  normalizeDashboardStats,
   normalizeLiveSession,
   normalizeSource,
   normalizeTaskStatus,
 } from "./api/client";
+import LandingPage from "./LandingPage";
 
 const STEPS = [
   { id: "upload", label: "Source", icon: "upload_file", help: "Upload a file or resolve a live stream." },
@@ -21,6 +23,7 @@ const VIEWS = [
   { id: "sources", label: "Sources", icon: "videocam", help: "Upload a recording or resolve a live stream." },
   { id: "geometry", label: "Geometry", icon: "schema", help: "Define the ROI, lane zones, counting lines, and directions." },
   { id: "runs", label: "Batch Runs", icon: "analytics", help: "Track a submitted recording and inspect its result." },
+  { id: "reports", label: "Reports", icon: "download", help: "Export the current result and review recent tasks." },
   { id: "live", label: "Live Monitor", icon: "broadcast", help: "Start and monitor one live inference session." },
   { id: "logs", label: "System Logs", icon: "terminal", help: "Review runtime events and failures." },
 ];
@@ -47,14 +50,84 @@ const emptyResult = {
   outputs: {},
 };
 
+const emptyDashboardStats = {
+  total_tasks: 0,
+  completed_tasks: 0,
+  failed_tasks: 0,
+  processing_tasks: 0,
+  recent_tasks: [],
+  vehicle_totals_by_type: {},
+};
+
+const CAMERA_PROFILES = [
+  {
+    id: "cam-01",
+    code: "CAM-01",
+    name: "North Gate",
+    location: "Nguyen Van Linh",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+  {
+    id: "cam-02",
+    code: "CAM-02",
+    name: "Riverside",
+    location: "Tran Hung Dao",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+  {
+    id: "cam-03",
+    code: "CAM-03",
+    name: "Downtown East",
+    location: "Le Duan Junction",
+    state: "not_configured",
+    speed: "--",
+    occupancy: "--",
+    lastSeen: "not connected",
+    hourly: [],
+    directions: {},
+    counts: {},
+  },
+];
+
+function flattenLiveCounts(counts = {}) {
+  return Object.values(counts).reduce((totals, laneCounts) => {
+    if (!laneCounts || typeof laneCounts !== "object") return totals;
+    Object.entries(laneCounts).forEach(([vehicleType, count]) => {
+      totals[vehicleType] = (totals[vehicleType] || 0) + Number(count || 0);
+    });
+    return totals;
+  }, {});
+}
+
+function formatAge(timestamp) {
+  if (!timestamp) return "--";
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - Number(timestamp)));
+  return seconds < 2 ? "just now" : `${seconds}s`;
+}
+
 function App() {
+  const [showLanding, setShowLanding] = useState(true);
   const [stepIndex, setStepIndex] = useState(0);
   const [activeView, setActiveView] = useState("dashboard");
   const [taskId, setTaskId] = useState("");
+  const [videoId, setVideoId] = useState("");
   const [videoFile, setVideoFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [sourceMode, setSourceMode] = useState("video");
   const [liveSource, setLiveSource] = useState(null);
+  const [liveSession, setLiveSession] = useState(null);
   const [preview, setPreview] = useState(null);
   const [roi, setRoi] = useState(null);
   const [crop, setCrop] = useState(null);
@@ -71,20 +144,68 @@ function App() {
   const [submittedConfig, setSubmittedConfig] = useState(null);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [operatorAlert, setOperatorAlert] = useState(null);
+  const [runtimeHealth, setRuntimeHealth] = useState("checking");
+  const [dashboardStats, setDashboardStats] = useState(emptyDashboardStats);
+  const [dashboardStatsState, setDashboardStatsState] = useState("idle");
+  const [dashboardStatsError, setDashboardStatsError] = useState("");
 
   const appendLog = useCallback((line) => {
     setLogs((current) => [...current.slice(-9), `> ${line}`]);
   }, []);
 
+  const refreshDashboardStats = useCallback(async () => {
+    setDashboardStatsState("loading");
+    setDashboardStatsError("");
+    try {
+      const payload = await apiRequest("/api/v1/dashboard/stats");
+      setDashboardStats(normalizeDashboardStats(payload));
+      setDashboardStatsState("ready");
+    } catch (error) {
+      setDashboardStatsState("error");
+      setDashboardStatsError(error.message || "Dashboard statistics are unavailable.");
+    }
+  }, []);
+
+  const clearCurrentLiveSession = useCallback(async () => {
+    const sessionId = liveSession?.session_id;
+    if (sessionId) {
+      try {
+        // DELETE /remove requests a graceful stop. Wait for the worker thread
+        // to leave the active-session set before another source is resolved;
+        // otherwise a fast source switch can hit LIVE_MAX_SESSIONS (429).
+        await removeLive(sessionId);
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          try {
+            const current = await fetchLiveSession(sessionId);
+            if (["stopped", "failed", "ended", "completed"].includes(current.status)) break;
+          } catch {
+            break;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+        }
+        await removeLive(sessionId).catch(() => {
+          // The session may already be terminal and removed by cleanup.
+        });
+      } catch {
+        // The session may already be terminal; local state still needs clearing.
+      }
+    }
+    setLiveSession(null);
+  }, [liveSession?.session_id]);
+
   const resetWorkflow = useCallback(() => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    clearCurrentLiveSession().catch(() => {});
     setStepIndex(0);
     setActiveView("sources");
     setTaskId("");
+    setVideoId("");
     setVideoFile(null);
     setVideoUrl("");
     setSourceMode("video");
     setLiveSource(null);
+    setLiveSession(null);
     setPreview(null);
     setRoi(null);
     setCrop(null);
@@ -96,7 +217,7 @@ function App() {
     setOperatorAlert(null);
     window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     setLogs(["> initialize_pipeline()", "> waiting for input stream..."]);
-  }, [videoUrl]);
+  }, [clearCurrentLiveSession, videoUrl]);
 
   const goTo = useCallback((nextIndex) => {
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, nextIndex)));
@@ -115,6 +236,52 @@ function App() {
   }, [crop, goTo]);
 
   useEffect(() => {
+    let cancelled = false;
+    const checkRuntimeHealth = async () => {
+      try {
+        await apiRequest("/ready");
+        if (!cancelled) setRuntimeHealth("online");
+      } catch (error) {
+        if (!cancelled) setRuntimeHealth(error.status === 503 ? "degraded" : "offline");
+      }
+    };
+    checkRuntimeHealth();
+    const timer = window.setInterval(checkRuntimeHealth, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    refreshDashboardStats();
+    const timer = window.setInterval(refreshDashboardStats, 30000);
+    return () => window.clearInterval(timer);
+  }, [refreshDashboardStats]);
+
+  useEffect(() => {
+    if (!liveSession?.session_id) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await fetchLiveSession(liveSession.session_id);
+        if (!cancelled && next) setLiveSession(next);
+      } catch (error) {
+        if (!cancelled) {
+          setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
+          appendLog(`live polling failed: ${error.message}`);
+        }
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [appendLog, liveSession?.session_id]);
+
+  useEffect(() => {
     let saved;
     try {
       saved = JSON.parse(window.localStorage.getItem(ACTIVE_TASK_STORAGE_KEY) || "null");
@@ -129,6 +296,7 @@ function App() {
         const status = await pollTask(saved.taskId);
         if (cancelled) return;
         setTaskId(saved.taskId);
+        setVideoId(saved.videoId || saved.taskId);
         setTaskStatus(status);
         if (["completed", "succeeded"].includes(status.status)) {
           const nextResult = await fetchResult(saved.taskId);
@@ -154,7 +322,10 @@ function App() {
   }, [appendLog, goTo]);
 
   useEffect(() => {
-    if (sourceMode !== "video" || !taskId || !roi || !crop || !lanes.length) return undefined;
+    const hasCompleteLane = lanes.some((lane) => (
+      lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2
+    ));
+    if (sourceMode !== "video" || !taskId || !videoId || !roi || !crop || !hasCompleteLane) return undefined;
     const timer = window.setTimeout(async () => {
       const config = buildLaneConfig({
         preview,
@@ -163,17 +334,16 @@ function App() {
         lanes,
         settings,
         videoFile,
-        includeDraft: true,
       });
       try {
-        await saveLaneConfig(taskId, config);
+        await saveLaneConfig(videoId, config);
         appendLog("draft geometry auto-saved");
       } catch (error) {
         appendLog(`draft auto-save failed: ${error.message}`);
       }
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [appendLog, crop, lanes, preview, roi, settings, sourceMode, taskId, videoFile]);
+  }, [appendLog, crop, lanes, preview, roi, settings, sourceMode, taskId, videoId, videoFile]);
 
   async function handleUpload(file) {
     if (!file) return;
@@ -183,19 +353,33 @@ function App() {
       return;
     }
 
+    await clearCurrentLiveSession();
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setTaskId("");
+    setVideoId("");
     const localVideoUrl = URL.createObjectURL(file);
     setVideoFile(file);
     setVideoUrl(localVideoUrl);
     setSourceMode("video");
     setLiveSource(null);
+    setPreview(null);
+    setRoi(null);
+    setCrop(null);
+    setResult(null);
+    setSubmittedConfig(null);
+    setTaskStatus({ status: "uploading", progress: 0, stage: "uploading" });
     appendLog(`uploading ${file.name}`);
 
     try {
       setOperatorAlert(null);
       const response = await uploadVideo(file);
       setTaskId(response.task_id);
-      window.localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({ taskId: response.task_id, sourceMode: "video" }));
+      setVideoId(response.video_id || response.task_id);
+      window.localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({
+        taskId: response.task_id,
+        videoId: response.video_id || response.task_id,
+        sourceMode: "video",
+      }));
       setTaskStatus({ status: response.status, progress: 0 });
       appendLog(`task created: ${response.task_id}`);
 
@@ -214,6 +398,18 @@ function App() {
 
   async function handleLiveResolve(url) {
     if (!url?.trim()) return;
+    await clearCurrentLiveSession();
+    if (videoUrl?.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
+    setTaskId("");
+    setVideoId("");
+    setVideoFile(null);
+    setVideoUrl("");
+    setPreview(null);
+    setRoi(null);
+    setCrop(null);
+    setResult(null);
+    setSubmittedConfig(null);
+    setTaskStatus({ status: "resolving", progress: 0, stage: "source_resolve" });
     appendLog(`resolving live source: ${url.trim()}`);
     try {
       setOperatorAlert(null);
@@ -261,7 +457,6 @@ function App() {
       settings,
       videoFile,
     });
-    setSubmittedConfig(config);
     setOperatorAlert(null);
     window.localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
     appendLog(`${sourceMode === "live" ? "validating live" : "submitting"} ${config.lanes.length} lane configs`);
@@ -269,12 +464,14 @@ function App() {
     if (sourceMode === "live") {
       const validation = await validateLiveConfig(config);
       if (!validation.valid) {
+        setSubmittedConfig(null);
         const message = (validation.errors || []).join("; ") || "Geometry validation failed";
         setTaskStatus({ status: "error", progress: 0, stage: "live_config_invalid", stage_detail: message });
         setOperatorAlert({ tone: "error", title: "Live config invalid", message, action: "Return to Lanes and fix each lane zone, counting line, and direction vector." });
         appendLog(`live config invalid: ${message}`);
         return;
       }
+      setSubmittedConfig(config);
       setLanes(laneDrafts);
       setTaskStatus({ status: "configured", progress: 0, stage: "ready_for_live", stage_detail: "Geometry validated" });
       setActiveView("live");
@@ -298,20 +495,41 @@ function App() {
     }
   }
 
+  if (showLanding) {
+    return <LandingPage onLaunch={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="app-shell">
-      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} />
+      <TopBar stepIndex={stepIndex} activeView={activeView} onStepSelect={navigateToStep} onReset={resetWorkflow} hasWork={Boolean(taskId || preview || submittedConfig)} runtimeHealth={runtimeHealth} onHome={() => setShowLanding(true)} />
       <main className="app-main">
         <SideNav
           taskStatus={taskStatus}
           result={result}
           activeView={activeView}
+          runtimeHealth={runtimeHealth}
           onNavigate={navigateToView}
         />
         <section className="workspace">
-          {!['dashboard', 'logs'].includes(activeView) && <WizardNav stepIndex={stepIndex} />}
+          {!['dashboard', 'logs', 'reports'].includes(activeView) && <WizardNav stepIndex={stepIndex} />}
           {operatorAlert && <OperatorAlert alert={operatorAlert} onDismiss={() => setOperatorAlert(null)} />}
-          {activeView === "dashboard" && <DashboardHome taskId={taskId} taskStatus={taskStatus} result={result} sourceMode={sourceMode} onNavigate={navigateToView} />}
+          {activeView === "dashboard" && (
+            <DashboardHome
+              taskId={taskId}
+              taskStatus={taskStatus}
+              result={result}
+              sourceMode={sourceMode}
+              videoUrl={videoUrl}
+              preview={preview}
+              liveSource={liveSource}
+              liveSession={liveSession}
+              stats={dashboardStats}
+              statsState={dashboardStatsState}
+              statsError={dashboardStatsError}
+              onRefreshStats={refreshDashboardStats}
+              onNavigate={navigateToView}
+            />
+          )}
           {activeView === "sources" && <UploadStep onUpload={handleUpload} onLiveResolve={handleLiveResolve} />}
           {activeView === "geometry" && stepIndex === 1 && preview && <RoiMaskingStep preview={preview} onBack={() => navigateToStep(0)} onConfirm={handleRoiConfirm} />}
           {activeView === "geometry" && stepIndex === 2 && crop && (
@@ -341,9 +559,13 @@ function App() {
               liveSource={liveSource}
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
+              onAlert={setOperatorAlert}
+              liveSession={liveSession}
+              setLiveSession={setLiveSession}
             />
           )}
           {activeView === "runs" && (!submittedConfig || sourceMode !== "video") && <EmptyState eyebrow="Batch runs" title="No batch run is ready to inspect." message="Batch Runs is only for uploaded recordings. Complete Geometry for a recording, then submit it here." actionLabel="Open Sources" onAction={() => navigateToView("sources")} />}
+          {activeView === "reports" && <ReportsPage result={result} taskId={taskId} stats={dashboardStats} onNavigate={navigateToView} />}
           {activeView === "live" && sourceMode === "live" && submittedConfig && (
             <AnalyticsDashboard
               view="live"
@@ -358,6 +580,9 @@ function App() {
               liveSource={liveSource}
               onJson={() => setJsonOpen(true)}
               appendLog={appendLog}
+              onAlert={setOperatorAlert}
+              liveSession={liveSession}
+              setLiveSession={setLiveSession}
             />
           )}
           {activeView === "live" && (sourceMode !== "live" || !submittedConfig) && <EmptyState eyebrow="Live monitor" title="Live monitoring is not configured yet." message="Resolve a live source, define its geometry, and validate the configuration before starting a session." actionLabel={sourceMode === "live" ? "Open Geometry" : "Open Sources"} onAction={() => navigateToView(sourceMode === "live" ? "geometry" : "sources")} />}
@@ -369,7 +594,7 @@ function App() {
   );
 }
 
-function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
+function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork, runtimeHealth, onHome }) {
   return (
     <header className="top-bar">
       <div className="brand-row">
@@ -379,7 +604,7 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
           <span className="brand-subtitle">Vision operations console</span>
         </div>
       </div>
-      {!['dashboard', 'logs'].includes(activeView) && <nav className="top-steps" aria-label="Workflow">
+      {!['dashboard', 'logs', 'reports'].includes(activeView) && <nav className="top-steps" aria-label="Workflow">
         {STEPS.map((step, index) => (
           <button
             key={step.id}
@@ -393,7 +618,11 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
         ))}
       </nav>}
       <div className="top-actions">
-        <span className="deploy-pill" title="The local API is responding"><span className="live-indicator" /> System online</span>
+        <button className="console-home-button" onClick={onHome} type="button" title="Back to TrafficFlow overview"><Icon name="arrow_left" /> Overview</button>
+        <span className={`deploy-pill health-${runtimeHealth}`} title={runtimeHealth === "online" ? "The runtime is ready" : "The runtime readiness state"}>
+          <span className="live-indicator" />
+          {runtimeHealth === "online" ? "Runtime ready" : runtimeHealth === "degraded" ? "Runtime degraded" : runtimeHealth === "checking" ? "Checking runtime" : "API offline"}
+        </span>
         <button className="icon-button" disabled={!hasWork} onClick={onReset} aria-label="Reset workflow" title="Clear current source/config and start a new workflow">
           <Icon name="restart" />
         </button>
@@ -402,56 +631,235 @@ function TopBar({ stepIndex, activeView, onStepSelect, onReset, hasWork }) {
   );
 }
 
-function DashboardHome({ taskId, taskStatus, result, sourceMode, onNavigate }) {
-  const currentState = taskStatus.status || "draft";
-  const modules = [
-    { id: "sources", icon: "videocam", eyebrow: "01 / Inputs", title: "Sources", text: "Upload a recording or resolve a live stream and create a reference frame." },
-    { id: "geometry", icon: "schema", eyebrow: "02 / Annotation", title: "Geometry", text: "Define the ROI, lane zones, counting lines, and direction vectors." },
-    { id: "runs", icon: "analytics", eyebrow: "03 / Batch", title: "Batch Runs", text: "Track one submitted recording and inspect its output and lane counts." },
-    { id: "live", icon: "broadcast", eyebrow: "04 / Realtime", title: "Live Monitor", text: "Start one live inference session and monitor its stream health." },
-    { id: "logs", icon: "terminal", eyebrow: "05 / Diagnostics", title: "System Logs", text: "Review runtime events and failures in a dedicated diagnostic view." },
-  ];
+function DashboardHome({ taskId, taskStatus, result, sourceMode, videoUrl, preview, liveSource, liveSession, stats, statsState, statsError, onRefreshStats, onNavigate }) {
+  const [selectedCameraId, setSelectedCameraId] = useState("cam-01");
+  const activeSourceCamera = useMemo(() => {
+    if (!taskId || (!liveSource && sourceMode !== "video")) return null;
+    const sourceId = liveSource?.source_id || taskId;
+    return {
+      id: `source-${sourceId}`,
+      code: sourceMode === "live" ? `LIVE-${sourceId.slice(0, 4).toUpperCase()}` : "UPLOAD-01",
+      name: sourceMode === "live" ? "Resolved live source" : "Uploaded recording",
+      location: liveSource?.source_type || "batch source",
+      state: taskStatus.status === "error" ? "attention" : liveSession?.status === "running" ? "online" : "standby",
+      speed: "-- km/h",
+      occupancy: "--",
+      lastSeen: "just now",
+      hourly: [],
+      directions: {},
+      counts: liveSession ? flattenLiveCounts(liveSession.counts) : sourceMode === "video" ? stats.vehicle_totals_by_type : {},
+      previewUrl: preview?.url || (liveSource?.preview_url ? apiUrl(liveSource.preview_url) : ""),
+      isSource: true,
+    };
+  }, [liveSession, liveSource, preview, sourceMode, stats.vehicle_totals_by_type, taskId, taskStatus.status]);
+
+  const cameras = useMemo(
+    () => activeSourceCamera ? [activeSourceCamera, ...CAMERA_PROFILES] : CAMERA_PROFILES,
+    [activeSourceCamera],
+  );
+
+  useEffect(() => {
+    if (activeSourceCamera) setSelectedCameraId(activeSourceCamera.id);
+  }, [activeSourceCamera]);
+
+  const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) || cameras[0];
+  const selectedCounts = selectedCamera.counts || {};
+  const selectedTotal = Object.values(selectedCounts).reduce((total, value) => total + Number(value || 0), 0);
+  const isActiveSource = Boolean(selectedCamera.isSource);
+  const liveFrameUrl = isActiveSource && liveSession?.session_id
+    ? apiUrl(`/live/sessions/${liveSession.session_id}/stream`)
+    : "";
+  const outputVideoUrl = isActiveSource && result?.outputs?.video_path ? apiUrl(result.outputs.video_path) : "";
+  const feedUrl = liveFrameUrl || selectedCamera.previewUrl || outputVideoUrl;
+  const runtimeLabel = liveSession?.status || (isActiveSource ? taskStatus.stage || taskStatus.status : selectedCamera.state);
+  const emptyFeed = !feedUrl;
 
   return (
-    <div className="subweb-page dashboard-home">
+    <div className="subweb-page dashboard-home camera-dashboard">
+      <div className="page-intro subweb-intro camera-dashboard-intro">
+        <div>
+          <p className="eyebrow">00 / Camera operations</p>
+          <h2>See every vehicle as it moves.</h2>
+          <p className="lede">Monitor one camera, inspect detections, and read the traffic story without leaving the page.</p>
+        </div>
+        <div className="camera-intro-actions">
+          <div className="intro-status"><span className="status-dot" /><div><strong>{runtimeLabel.replaceAll("_", " ")}</strong><small>{isActiveSource ? "Active source" : "Camera preview"}</small></div></div>
+          <button className="secondary-button" onClick={onRefreshStats} disabled={statsState === "loading"}><Icon name="restart" /> {statsState === "loading" ? "Refreshing…" : "Refresh data"}</button>
+        </div>
+      </div>
+      <section className="camera-selector" aria-labelledby="camera-selector-title">
+        <div className="camera-selector-heading">
+          <div><p className="eyebrow">Camera fleet</p><h3 id="camera-selector-title">Choose a camera to inspect</h3></div>
+          <span className={`meta-pill stats-state-${statsState}`}><span className="live-indicator" />{statsState === "error" ? "Stats unavailable" : "Synced just now"}</span>
+        </div>
+        <div className="camera-selector-list" role="listbox" aria-label="Available cameras">
+          {cameras.map((camera) => (
+            <button className={`camera-option ${selectedCamera.id === camera.id ? "selected" : ""}`} key={camera.id} role="option" aria-selected={selectedCamera.id === camera.id} onClick={() => setSelectedCameraId(camera.id)}>
+              <span className={`camera-option-dot state-${camera.state}`} />
+              <span className="camera-option-copy"><strong>{camera.code} <span>{camera.name}</span></strong><small><Icon name="location" /> {camera.location}</small></span>
+              <span className="camera-option-count">{camera.isSource ? "ACTIVE" : camera.state === "not_configured" ? "NOT CONNECTED" : `${Object.values(camera.counts).reduce((total, value) => total + Number(value || 0), 0)} today`}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      {statsError && <div className="dashboard-data-alert" role="status"><Icon name="info" /><span>{statsError}</span></div>}
+      <div className="camera-command-grid">
+        <CameraFeed camera={selectedCamera} feedUrl={feedUrl} outputVideoUrl={outputVideoUrl} emptyFeed={emptyFeed} taskStatus={taskStatus} liveSession={liveSession} />
+        <CameraTelemetry camera={selectedCamera} total={selectedTotal} result={result} liveSession={liveSession} />
+      </div>
+      <div className="camera-analytics-grid">
+        <CameraVolumeChart camera={selectedCamera} />
+        <CameraDirectionPanel camera={selectedCamera} />
+      </div>
+      <section className="camera-bottom-row">
+        <div><p className="eyebrow">Camera workspace</p><h3>{selectedCamera.code} is selected</h3><p className="hint-text">Open Geometry or Live Monitor to change the feed configuration while keeping this camera's analytics view in context.</p></div>
+        <div className="button-row"><button className="secondary-button" onClick={() => onNavigate(isActiveSource && sourceMode === "live" ? "live" : isActiveSource ? "runs" : "sources")}><Icon name="arrow_right" /> {isActiveSource ? "Open active workspace" : "Connect this camera"}</button></div>
+      </section>
+      <DashboardInsights stats={stats} statsState={statsState} />
+    </div>
+  );
+}
+
+function CameraFeed({ camera, feedUrl, outputVideoUrl, emptyFeed, taskStatus, liveSession }) {
+  const feedLabel = liveSession?.status === "running" ? "INFERENCE ON" : outputVideoUrl ? "ANALYZED OUTPUT" : feedUrl ? "FRAME PREVIEW" : "NO LIVE FEED";
+  return (
+    <section className="camera-feed-panel" aria-labelledby="camera-feed-title">
+      <div className="camera-feed-header">
+        <div><p className="eyebrow">Live detection feed</p><h3 id="camera-feed-title">{camera.code} · {camera.name}</h3><span><Icon name="location" /> {camera.location}</span></div>
+        <div className="camera-feed-header-actions"><span className={`camera-live-pill ${camera.state === "online" ? "online" : ""}`}><span />{liveSession?.status === "running" ? "LIVE" : camera.state === "online" ? "MONITORING" : "STANDBY"}</span><button className="icon-button solid" aria-label="Expand camera feed" title="Expand camera feed"><Icon name="crop_free" /></button></div>
+      </div>
+      <div className={`camera-feed-stage ${emptyFeed ? "empty" : ""}`}>
+        {outputVideoUrl ? <video src={outputVideoUrl} autoPlay muted loop controls playsInline aria-label="Annotated detection output" /> : feedUrl ? <img src={feedUrl} alt={`${camera.name} traffic camera feed`} /> : <div className="camera-feed-empty"><Icon name="broadcast" /><strong>No live feed connected</strong><span>Resolve a live source and start inference to see annotated frames here.</span></div>}
+        <div className="camera-grid-overlay" aria-hidden="true" />
+        <div className="camera-feed-stamp"><span className="live-indicator" /> {feedLabel}</div>
+        <div className="camera-feed-timestamp">{liveSession?.updated_at ? `${formatAge(liveSession.updated_at)} ago` : feedUrl ? "source preview" : "awaiting source"} · {taskStatus.stage || "tracking"}</div>
+      </div>
+      <div className="camera-feed-footer"><span><strong>{camera.code}</strong> · {liveSession?.perf?.reader_output?.join("×") || "source size pending"}</span><span>{liveSession?.fps ? `${liveSession.fps} FPS` : "FPS --"}</span><span>Model: {liveSession?.model_name?.split("/").pop() || "not running"}</span></div>
+    </section>
+  );
+}
+
+function CameraTelemetry({ camera, total, result, liveSession }) {
+  const rows = Object.entries(camera.counts || {}).sort(([, left], [, right]) => right - left);
+  const max = Math.max(1, ...rows.map(([, value]) => Number(value || 0)));
+  return (
+    <aside className="camera-telemetry" aria-label={`${camera.code} statistics`}>
+      <div className="camera-telemetry-heading"><div><p className="eyebrow">Selected camera</p><h3>Traffic snapshot</h3></div><span className="meta-pill">Today</span></div>
+      <div className="camera-total"><strong>{liveSession?.lane_volume_total ?? result?.total_count ?? total}</strong><span>vehicles counted</span><small>{liveSession?.status === "running" ? "Updating from the live session" : "No live session running"}</small></div>
+      <div className="camera-metric-grid"><Metric label="Avg. speed" value={camera.speed} small /><Metric label="Road occupancy" value={camera.occupancy} small /><Metric label="Unique tracks" value={liveSession?.global_unique_count ?? result?.summary?.global_unique_count ?? "--"} small /><Metric label="Inference" value={liveSession?.perf?.infer_wall_ms ? `${liveSession.perf.infer_wall_ms} ms` : "--"} small /></div>
+      <div className="camera-class-breakdown"><div className="camera-section-label"><span>Vehicle classes</span><span>{rows.length} classes</span></div>{rows.map(([type, value]) => <div className="camera-class-row" key={type}><span className={`class-mark class-${type}`} /><span>{type}</span><div className="bar-track"><div style={{ width: `${Math.min(100, (Number(value || 0) / max) * 100)}%` }} /></div><strong>{value}</strong></div>)}</div>
+      <div className={`camera-health ${liveSession?.status === "failed" ? "error" : ""}`}><span className="status-dot" /><div><strong>{liveSession?.status === "running" ? "Detection pipeline healthy" : liveSession?.status === "failed" ? "Detection pipeline stopped" : "Awaiting live session"}</strong><small>{liveSession?.perf?.frame_age_ms != null ? `Frame age ${liveSession.perf.frame_age_ms} ms · ${formatAge(liveSession.updated_at)} ago` : "Connect a live source to populate runtime telemetry."}</small></div></div>
+    </aside>
+  );
+}
+
+function CameraVolumeChart({ camera }) {
+  const points = camera.hourly || [];
+  const max = Math.max(1, ...points);
+  const chartPoints = points.map((value, index) => `${(index / Math.max(1, points.length - 1)) * 100},${92 - (value / max) * 72}`).join(" ");
+  const areaPoints = `0,100 ${chartPoints} 100,100`;
+  if (!points.length) return <section className="camera-chart-card chart-empty" aria-labelledby="volume-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Hourly volume</p><h3 id="volume-chart-title">Traffic flow</h3></div></div><p className="hint-text">Live volume history will appear after the session collects data.</p></section>;
+  return (
+    <section className="camera-chart-card" aria-labelledby="volume-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Hourly volume</p><h3 id="volume-chart-title">Traffic flow</h3></div><span className="chart-legend"><i /> vehicles / hour</span></div><div className="volume-chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Hourly vehicle volume chart"><defs><linearGradient id="volume-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#356fe6" stopOpacity=".28" /><stop offset="1" stopColor="#356fe6" stopOpacity="0" /></linearGradient></defs><path d={`M ${areaPoints.replaceAll(" ", " L ")}`} fill="url(#volume-fill)" /><polyline points={chartPoints} fill="none" stroke="#356fe6" strokeWidth="2.2" vectorEffect="non-scaling-stroke" /></svg><div className="volume-chart-axis"><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span></div></div></section>
+  );
+}
+
+function CameraDirectionPanel({ camera }) {
+  const rows = Object.entries(camera.directions || {}).sort(([, left], [, right]) => right - left);
+  const max = Math.max(1, ...rows.map(([, value]) => value));
+  if (!rows.length) return <section className="camera-chart-card chart-empty" aria-labelledby="direction-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Directional flow</p><h3 id="direction-chart-title">Vehicles by direction</h3></div></div><p className="hint-text">Directional counts will appear when live geometry is active.</p></section>;
+  return <section className="camera-chart-card direction-card" aria-labelledby="direction-chart-title"><div className="camera-chart-header"><div><p className="eyebrow">Directional flow</p><h3 id="direction-chart-title">Vehicles by direction</h3></div><span className="meta-pill">Live window</span></div><div className="direction-list">{rows.map(([direction, value]) => <div className="direction-row" key={direction}><span>{direction}</span><div className="bar-track"><div style={{ width: `${(value / max) * 100}%` }} /></div><strong>{value}</strong></div>)}</div><div className="direction-note"><span className="status-dot" /><span>Counts are read from the selected live session.</span></div></section>;
+}
+
+function DashboardInsights({ stats, statsState }) {
+  const vehicleRows = Object.entries(stats.vehicle_totals_by_type || {}).sort(([, left], [, right]) => right - left);
+  const maxVehicleCount = Math.max(1, ...vehicleRows.map(([, count]) => count));
+
+  return (
+    <div className="dashboard-insights">
+      <section className="panel-card recent-tasks-card" aria-labelledby="recent-tasks-title">
+        <div className="insight-heading">
+          <div>
+            <p className="eyebrow">Recent activity</p>
+            <h3 id="recent-tasks-title">Latest processing jobs</h3>
+          </div>
+          <span className="meta-pill">Last {stats.recent_tasks.length || 0}</span>
+        </div>
+        {statsState === "loading" && !stats.recent_tasks.length ? (
+          <p className="hint-text">Loading recent jobs…</p>
+        ) : stats.recent_tasks.length ? (
+          <div className="recent-task-list" role="list">
+            {stats.recent_tasks.map((task) => (
+              <div className="recent-task-row" role="listitem" key={task.task_id}>
+                <div>
+                  <strong>{task.task_id}</strong>
+                  <small>{formatTaskDate(task.created_at)}</small>
+                </div>
+                <span className={`task-status status-${task.status}`}>{task.status.replaceAll("_", " ")}</span>
+                <span className="task-progress">{task.progress}%</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="hint-text">No processing jobs have been recorded yet.</p>
+        )}
+      </section>
+      <section className="tool-panel vehicle-breakdown" aria-labelledby="vehicle-breakdown-title">
+        <p className="eyebrow">Fleet breakdown</p>
+        <h3 id="vehicle-breakdown-title">Vehicles by class</h3>
+        {vehicleRows.length ? vehicleRows.map(([vehicleType, count]) => (
+          <div className="breakdown-row" key={vehicleType}>
+            <span>{vehicleType}</span>
+            <div className="bar-track"><div style={{ width: `${Math.min(100, (count / maxVehicleCount) * 100)}%` }} /></div>
+            <strong>{count}</strong>
+          </div>
+        )) : <p className="hint-text">Vehicle totals appear after a completed run.</p>}
+      </section>
+    </div>
+  );
+}
+
+function ReportsPage({ result, taskId, stats, onNavigate }) {
+  const reportTaskId = result?.task_id || taskId || "trafficflow-report";
+  const hasResult = Boolean(result && result !== emptyResult && result.status !== "idle");
+  const outputVideoUrl = result?.outputs?.video_path || "";
+
+  function exportJson() {
+    if (hasResult) downloadTextFile(`${reportTaskId}.json`, JSON.stringify(result, null, 2), "application/json");
+  }
+
+  function exportCsv() {
+    if (hasResult) downloadTextFile(`${reportTaskId}.csv`, resultToCsv(result, reportTaskId), "text/csv;charset=utf-8");
+  }
+
+  function openOutputVideo() {
+    if (outputVideoUrl) window.open(apiUrl(outputVideoUrl), "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <div className="subweb-page reports-page">
       <div className="page-intro subweb-intro">
         <div>
-          <p className="eyebrow">00 / Operations overview</p>
-          <h2>Know what is happening before you start processing.</h2>
-          <p className="lede">Each workspace has one job: connect a source, define geometry, run inference, monitor a live session, or inspect diagnostics.</p>
+          <p className="eyebrow">04 / Reporting</p>
+          <h2>Turn a run into a shareable result.</h2>
+          <p className="lede">Export the active analytics result or review the latest jobs returned by the backend dashboard contract.</p>
         </div>
-        <div className="intro-status">
-          <span className="status-dot" />
-          <div><strong>{currentState.replaceAll("_", " ")}</strong><small>{sourceMode === "live" ? "Live source selected" : "Recorded source mode"}</small></div>
+        <span className="meta-pill">{hasResult ? `Task ${String(reportTaskId).slice(0, 12)}` : "No active result"}</span>
+      </div>
+      <section className="report-card" aria-labelledby="report-actions-title">
+        <div>
+          <p className="eyebrow">Current result</p>
+          <h3 id="report-actions-title">Export analytics</h3>
+          <p className="hint-text">{hasResult ? "Use JSON for machine-readable output or CSV for spreadsheet analysis." : "Complete a batch run first to enable report exports."}</p>
         </div>
-      </div>
-      <div className="overview-grid" aria-label="Runtime overview">
-        <Metric label="Runtime state" value={currentState.replaceAll("_", " ")} small />
-        <Metric label="Active source" value={sourceMode === "live" ? "Live stream" : taskId ? "Recording" : "None"} small />
-        <Metric label="Vehicles counted" value={result?.total_count ?? "--"} small />
-        <Metric label="Progress" value={`${taskStatus.progress ?? 0}%`} small />
-      </div>
-      {taskId && (
-        <section className="current-work panel-card" aria-labelledby="current-work-title">
-          <div>
-            <p className="eyebrow">Current work</p>
-            <h3 id="current-work-title">{sourceMode === "live" ? "Live source configuration" : "Batch task in the pipeline"}</h3>
-            <p className="hint-text">Task or source ID: <code>{taskId}</code></p>
-          </div>
-          <button className="secondary-button" onClick={() => onNavigate(sourceMode === "live" ? "live" : "runs")}>Open current workspace <Icon name="arrow_right" /></button>
-        </section>
-      )}
-      <div className="module-grid">
-        {modules.map((module) => (
-          <section className="module-card" key={module.id}>
-            <div className="module-card-icon"><Icon name={module.icon} /></div>
-            <p className="eyebrow">{module.eyebrow}</p>
-            <h3>{module.title}</h3>
-            <p>{module.text}</p>
-            <button className="text-button" onClick={() => onNavigate(module.id)}>Open {module.title} <Icon name="arrow_right" /></button>
-          </section>
-        ))}
-      </div>
+        <div className="button-row report-actions">
+          <button className="secondary-button" onClick={exportJson} disabled={!hasResult}><Icon name="code" /> JSON</button>
+          <button className="secondary-button" onClick={exportCsv} disabled={!hasResult}><Icon name="table" /> CSV</button>
+          <button className="primary-button" onClick={openOutputVideo} disabled={!outputVideoUrl}><Icon name="download" /> Open output video</button>
+          {!hasResult && <button className="secondary-button" onClick={() => onNavigate("sources")}><Icon name="arrow_right" /> Start a run</button>}
+        </div>
+      </section>
+      <DashboardInsights stats={stats} statsState="ready" />
     </div>
   );
 }
@@ -504,14 +912,14 @@ function SystemLogsPage({ logs, taskId, taskStatus, result }) {
   );
 }
 
-function SideNav({ taskStatus, result, activeView, onNavigate }) {
+function SideNav({ taskStatus, result, activeView, runtimeHealth, onNavigate }) {
   return (
     <aside className="side-nav">
       <div className="runtime-card">
-        <span className="status-dot" />
+        <span className={`status-dot health-${runtimeHealth}`} />
         <div>
           <h2>Core runtime</h2>
-          <p aria-live="polite">{taskStatus.status || "idle"}</p>
+          <p aria-live="polite">{runtimeHealth === "offline" ? "api offline" : runtimeHealth === "degraded" ? "queue or worker blocked" : taskStatus.status || "idle"}</p>
         </div>
       </div>
       <div className="side-caption">Workspace</div>
@@ -529,9 +937,9 @@ function SideNav({ taskStatus, result, activeView, onNavigate }) {
 
 function NavItem({ icon, label, active = false, title, onClick }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} title={title} onClick={onClick}>
+    <button className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} aria-label={label} title={title} onClick={onClick}>
       <Icon name={icon} />
-      {label}
+      <span className="nav-label">{label}</span>
     </button>
   );
 }
@@ -670,6 +1078,7 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
   const pointer = useCanvasPointer(canvasRef);
 
   function handleDown(event) {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     const point = pointer(event);
     const index = vertices.findIndex((vertex) => distance(vertex, point) < handleHitRadius(preview));
     if (index >= 0) {
@@ -734,10 +1143,11 @@ function RoiMaskingStep({ preview, onBack, onConfirm }) {
           style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
           tabIndex="0"
           aria-label="ROI annotation canvas. Click to add a point and drag existing points to refine the polygon."
-          onMouseDown={handleDown}
-          onMouseMove={handleMove}
-          onMouseUp={handleUp}
-          onMouseLeave={handleUp}
+          onPointerDown={handleDown}
+          onPointerMove={handleMove}
+          onPointerUp={handleUp}
+          onPointerCancel={handleUp}
+          onPointerLeave={handleUp}
         />
       </section>
       <aside className="tool-panel">
@@ -786,6 +1196,7 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
 
   function handleDown(event) {
     if (!activeLane) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     const point = clampPoint(pointer(event), crop.width, crop.height);
     const hit = findLanePoint(lanes, point, crop);
     if (hit) {
@@ -859,10 +1270,11 @@ function LaneEditorStep({ crop, lanes, setLanes, settings, setSettings, onBack, 
           style={{ aspectRatio: `${crop.width} / ${crop.height}` }}
           tabIndex="0"
           aria-label="Lane annotation canvas. Select a tool and click or drag on the crop to define lane geometry."
-          onMouseDown={handleDown}
-          onMouseMove={handleMove}
-          onMouseUp={handleUp}
-          onMouseLeave={handleUp}
+          onPointerDown={handleDown}
+          onPointerMove={handleMove}
+          onPointerUp={handleUp}
+          onPointerCancel={handleUp}
+          onPointerLeave={handleUp}
         />
       </section>
       <aside className="tool-panel lane-tools">
@@ -941,28 +1353,10 @@ function SettingsPanel({ settings, setSettings }) {
   );
 }
 
-function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog }) {
+function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setTaskStatus, result, setResult, submittedConfig, sourceMode, liveSource, onJson, appendLog, onAlert, liveSession, setLiveSession }) {
   const isLiveView = view === "live";
   const [liveUrl, setLiveUrl] = useState(liveSource?.resolved_url || liveSource?.source_url || "");
-  const [liveSession, setLiveSession] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
-  const liveSessionRef = useRef(null);
-
-  useEffect(() => {
-    liveSessionRef.current = liveSession;
-  }, [liveSession]);
-
-  useEffect(() => {
-    if (!isLiveView) return undefined;
-    return () => {
-      const sessionId = liveSessionRef.current?.session_id;
-      if (sessionId) {
-        removeLive(sessionId).catch(() => {
-          // The backend may already have removed a stopped/failed session.
-        });
-      }
-    };
-  }, [isLiveView]);
 
   useEffect(() => {
     if (isLiveView || !taskId) return undefined;
@@ -981,20 +1375,23 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
           }
         } else if (statusPayload.status === "failed") {
           window.clearInterval(interval);
-          appendLog(`task failed: ${statusPayload.error_message || statusPayload.stage_detail || "unknown error"}`);
+          const message = statusPayload.error_message || statusPayload.stage_detail || "unknown error";
+          appendLog(`task failed: ${message}`);
+          onAlert({ tone: "error", title: "Batch task failed", message, action: "Review System Logs, then reset the workflow or retry the task." });
         }
       } catch (error) {
         if (cancelled) return;
         window.clearInterval(interval);
         setTaskStatus({ status: "error", progress: 0, stage: "poll_failed", stage_detail: error.message });
         appendLog(`task polling failed: ${error.message}`);
+        onAlert({ tone: "error", title: "Batch status unavailable", message: error.message, action: "Check the API connection and retry polling from the current workspace." });
       }
     }, 1500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [appendLog, isLiveView, setResult, setTaskStatus, taskId]);
+  }, [appendLog, isLiveView, onAlert, setResult, setTaskStatus, taskId]);
 
   useEffect(() => {
     if (isLiveView && (liveSource?.resolved_url || liveSource?.source_url)) {
@@ -1002,37 +1399,21 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
     }
   }, [isLiveView, liveSource]);
 
-  useEffect(() => {
-    if (!isLiveView || !liveSession?.session_id) return undefined;
-    let cancelled = false;
-    const interval = window.setInterval(async () => {
-      try {
-        const next = await fetchLiveSession(liveSession.session_id);
-        if (!cancelled && next) setLiveSession(next);
-      } catch (error) {
-        if (!cancelled) {
-          setLiveSession((current) => current ? { ...current, status: "failed", last_error: error.message } : current);
-          appendLog(`live polling failed: ${error.message}`);
-          window.clearInterval(interval);
-        }
-      }
-    }, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [appendLog, isLiveView, liveSession?.session_id]);
-
   async function startLiveSession() {
     if (!liveUrl.trim() || !submittedConfig) return;
     setLiveBusy(true);
     appendLog(`starting live source: ${liveUrl.trim()}`);
     try {
-      const session = await createLiveSession(liveUrl.trim(), submittedConfig);
+      const session = await createLiveSession(
+        liveUrl.trim(),
+        submittedConfig,
+        liveSource?.source_id || liveSource?.id,
+      );
       setLiveSession(session);
       appendLog(`live session: ${session?.session_id || "failed"}`);
     } catch (error) {
       appendLog(`live start failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session failed to start", message: error.message, action: "Confirm the stream URL and backend availability, then try Start Live again." });
     } finally {
       setLiveBusy(false);
     }
@@ -1046,6 +1427,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       setLiveSession((current) => current ? { ...current, status: "stopping" } : current);
     } catch (error) {
       appendLog(`live stop failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session could not stop", message: error.message, action: "Retry Stop or use System Logs to inspect the runtime state." });
     }
   }
 
@@ -1058,6 +1440,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
       appendLog(`live session removed: ${sessionId.slice(0, 8)}`);
     } catch (error) {
       appendLog(`live removal failed: ${error.message}`);
+      onAlert({ tone: "error", title: "Live session could not be cleared", message: error.message, action: "Retry Clear Session after the backend responds." });
     }
   }
 
@@ -1193,7 +1576,7 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
             value={liveUrl}
             onChange={(event) => setLiveUrl(event.target.value)}
             placeholder="Paste HLS/MJPEG/RTSP/direct video URL"
-            title="Resolved stream URL. For YouTube, use Resolve Source in step 1 first."
+            title="Source URL. YouTube playback URLs are resolved securely by the backend."
           />
           <button className="primary-button" disabled={!canStartLive} title={liveStartTitle} onClick={startLiveSession}>{liveBusy ? "Starting..." : "Start Live"}</button>
           <button className="secondary-button" disabled={!liveSession?.session_id || liveSession.status === "stopping"} title="Stop inference but keep the latest session metrics visible" onClick={stopLiveSession}>Stop</button>
@@ -1219,9 +1602,11 @@ function AnalyticsDashboard({ view = "batch", taskId, videoUrl, taskStatus, setT
             <h3>Vehicle Events</h3>
           </div>
         </div>
-        {laneRows.map(([laneId, counts]) => (
+        {laneRows.length ? laneRows.map(([laneId, counts]) => (
           <LaneBars key={laneId} laneId={laneId} counts={counts} max={Math.max(1, visibleResult.total_count)} />
-        ))}
+        )) : (
+          <p className="hint-text chart-empty">Lane counts will appear after the first completed result.</p>
+        )}
       </section>
       <section className="debug-panel">
         <div className="panel-header compact">
@@ -1296,7 +1681,10 @@ function Icon({ name }) {
     videocam: <><path d="m15 10 5-3v10l-5-3" /><rect x="3" y="6" width="12" height="12" rx="2" /></>,
     schema: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="15" width="6" height="6" rx="1" /><path d="M9 6h3a3 3 0 0 1 3 3v6" /></>,
     terminal: <><path d="m5 7 4 4-4 4" /><path d="M12 17h7" /></>,
+    location: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z" /><circle cx="12" cy="10" r="2.5" /></>,
     code: <><path d="m8 9-3 3 3 3" /><path d="m16 9 3 3-3 3" /><path d="m14 5-4 14" /></>,
+    download: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>,
+    table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M9 4v16M15 4v16" /></>,
     error: <><circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16h.01" /></>,
     info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></>,
     close: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>,
@@ -1351,7 +1739,12 @@ async function uploadVideo(file) {
 
 async function fetchPreview(taskId) {
   const blob = await apiBlob(`/videos/${taskId}/preview`);
-  return loadImage(URL.createObjectURL(blob));
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    return await loadImage(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 async function resolveLiveSource(url) {
@@ -1394,10 +1787,15 @@ async function fetchResult(taskId) {
   return normalizeAnalyticsResult(await apiRequest(`/tasks/${taskId}/result`));
 }
 
-async function createLiveSession(sourceUrl, laneConfig) {
+async function createLiveSession(sourceUrl, laneConfig, sourceId = null) {
   return normalizeLiveSession(await apiRequest("/live/sessions", {
     method: "POST",
-    body: JSON.stringify({ source_url: sourceUrl, lane_config: laneConfig, frame_skip: 2 }),
+    body: JSON.stringify({
+      source_url: sourceUrl,
+      source_id: sourceId || undefined,
+      lane_config: laneConfig,
+      frame_skip: 2,
+    }),
   }));
 }
 
@@ -1425,9 +1823,9 @@ function createLane(index) {
   };
 }
 
-function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile, includeDraft = false }) {
+function buildLaneConfig({ preview, roi, crop, lanes, settings, videoFile }) {
   const validLanes = lanes
-    .filter((lane) => includeDraft || (lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2))
+    .filter((lane) => lane.valid_zone.length === 4 && lane.counting_line.length === 2 && lane.direction.length === 2)
     .map((lane) => ({
       lane_id: lane.lane_id.trim() || "lane",
       valid_zone: lane.valid_zone.map((point) => toSourcePoint(point, roi.cropRect)),
@@ -1702,6 +2100,43 @@ function createId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const random = Math.random().toString(16).slice(2);
   return `client-${Date.now().toString(16)}-${random}`;
+}
+
+function formatTaskDate(value) {
+  if (!value) return "Unknown time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function formatClock(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return "--:--:--";
+  return value.toLocaleTimeString(undefined, { hour12: false });
+}
+
+function resultToCsv(result, taskId) {
+  const rows = [["task_id", "lane", "vehicle_type", "count"]];
+  Object.entries(result.counts || {}).forEach(([laneId, counts]) => {
+    CLASS_ALLOWED.forEach((vehicleType) => {
+      rows.push([taskId, laneId, vehicleType, Number(counts?.[vehicleType] || 0)]);
+    });
+  });
+  if (rows.length === 1) rows.push([taskId, "", "", Number(result.total_count || 0)]);
+  return rows.map((row) => row.map((value) => {
+    const cell = String(value ?? "");
+    return /[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+  }).join(",")).join("\n");
+}
+
+function downloadTextFile(filename, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function round(value) {

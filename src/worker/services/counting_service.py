@@ -76,7 +76,8 @@ def bbox_intersects_polygon(bbox_xyxy: List[float], polygon: List[List[float]]) 
 class DirectionFilter:
     """Checks whether a track's Kalman velocity aligns with the lane direction."""
 
-    def __init__(self, direction: List[List[float]]):
+    def __init__(self, direction: List[List[float]], cos_threshold: float = COS_THRESHOLD):
+        self.cos_threshold = cos_threshold
         if direction and len(direction) == 2:
             self.dir_vec = (direction[1][0] - direction[0][0],
                             direction[1][1] - direction[0][1])
@@ -90,7 +91,7 @@ class DirectionFilter:
         v_mag = math.sqrt(velocity[0] ** 2 + velocity[1] ** 2)
         d_mag = math.sqrt(self.dir_vec[0] ** 2 + self.dir_vec[1] ** 2)
         if v_mag > 0 and d_mag > 0:
-            return (dot / (v_mag * d_mag)) >= COS_THRESHOLD
+            return (dot / (v_mag * d_mag)) >= self.cos_threshold
         return True
 
     def is_movement_aligned(self, start: Tuple[float, float], end: Tuple[float, float]) -> bool:
@@ -105,10 +106,10 @@ class LineCrossingDetector:
     """Detects when a track crosses a counting line. Direction filtered by
     Kalman velocity from the tracker, not raw frame-to-frame delta."""
 
-    def __init__(self, counting_line: List[List[float]], direction: List[List[float]]):
+    def __init__(self, counting_line: List[List[float]], direction: List[List[float]], cos_threshold: float = COS_THRESHOLD):
         self.line_start = (counting_line[0][0], counting_line[0][1])
         self.line_end = (counting_line[1][0], counting_line[1][1])
-        self.dir_filter = DirectionFilter(direction)
+        self.dir_filter = DirectionFilter(direction, cos_threshold=cos_threshold)
         self._crossed_ids: Set[int] = set()
 
     def check_crossing(self, track_id: int,
@@ -146,8 +147,15 @@ class CountingState:
         - lost_frames: int            ← 0 = visible, >0 = predicted (lost)
     """
 
-    def __init__(self, lanes: List[dict]):
+    def __init__(self, lanes: List[dict], settings: dict | None = None):
         self.lanes = lanes
+        settings = settings or {}
+        self.movement_threshold_px = max(0.0, float(settings.get("movement_threshold_px", 0)))
+        self.cooldown_frames = max(0, int(settings.get("cooldown_frames", 0)))
+        self.cooldown_distance_px = max(0.0, float(settings.get("cooldown_distance_px", 0)))
+        self.zone_policy = settings.get("zone_policy", "strict")
+        self._frame_index = 0
+        self._recent_lane_crossings: Dict[str, deque] = defaultdict(deque)
         self.detectors: Dict[str, LineCrossingDetector] = {}
         self.counters: Dict[str, Dict[str, Set[int]]] = {}
         self.global_counted_ids: Set[int] = set()
@@ -170,6 +178,7 @@ class CountingState:
             self.counters[lid] = defaultdict(set)
 
     def process_detections(self, detections: List[dict]):
+        self._frame_index += 1
         for det in detections:
             tid = det.get("track_id")
             if tid is None:
@@ -211,7 +220,10 @@ class CountingState:
             observed_lane = None
             for lane in self.lanes:
                 poly = lane.get("valid_zone", [])
-                if poly and point_in_polygon(smooth_center[0], smooth_center[1], poly):
+                in_zone = point_in_polygon(smooth_center[0], smooth_center[1], poly)
+                if self.zone_policy == "flexible" and poly:
+                    in_zone = bbox_intersects_polygon([x1, y1, x2, y2], poly)
+                if poly and in_zone:
                     observed_lane = lane["lane_id"]
                     break
 
@@ -233,6 +245,8 @@ class CountingState:
                 continue
             if self._track_age[tid] < MIN_TRACK_AGE_FRAMES:
                 continue
+            if self.movement_threshold_px and math.dist(last_center, smooth_center) < self.movement_threshold_px:
+                continue
 
             # --- Check class filter ---
             lane_cfg = next((l for l in self.lanes if l["lane_id"] == best), None)
@@ -247,6 +261,21 @@ class CountingState:
             history = self._anchor_history.get(tid)
             direction_start = history[0] if history else last_center
             if detector.check_crossing(tid, last_center, smooth_center, direction_start):
+                recent = self._recent_lane_crossings[best]
+                while recent and self._frame_index - recent[0][0] > self.cooldown_frames:
+                    recent.popleft()
+                if self.cooldown_frames and self.cooldown_distance_px:
+                    too_close = any(
+                        math.dist(event_center, smooth_center) < self.cooldown_distance_px
+                        for _event_frame, event_center in recent
+                    )
+                    if too_close:
+                        # The detector marks an ID as crossed before the
+                        # lane-level cooldown can reject the event. Put it
+                        # back so a later, valid crossing remains countable.
+                        detector._crossed_ids.discard(tid)
+                        continue
+                recent.append((self._frame_index, smooth_center))
                 self.counters[best][cls_name].add(tid)
                 self.global_counted_ids.add(tid)
                 self.track_counted_lanes[tid].add(best)

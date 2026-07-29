@@ -130,6 +130,29 @@ export function normalizeLiveSession(payload = {}) {
   };
 }
 
+export function normalizeDashboardStats(payload = {}) {
+  const recentTasks = Array.isArray(payload.recent_tasks) ? payload.recent_tasks : [];
+  const vehicleTotals = payload.vehicle_totals_by_type && typeof payload.vehicle_totals_by_type === "object"
+    ? payload.vehicle_totals_by_type
+    : {};
+
+  return {
+    total_tasks: Number(payload.total_tasks || 0),
+    completed_tasks: Number(payload.completed_tasks || 0),
+    failed_tasks: Number(payload.failed_tasks || 0),
+    processing_tasks: Number(payload.processing_tasks || 0),
+    recent_tasks: recentTasks.map((task) => ({
+      task_id: task.task_id || task.id || "--",
+      status: task.status || "unknown",
+      progress: Number(task.progress || 0),
+      created_at: task.created_at || null,
+    })),
+    vehicle_totals_by_type: Object.fromEntries(
+      Object.entries(vehicleTotals).map(([vehicleType, count]) => [vehicleType, Number(count || 0)]),
+    ),
+  };
+}
+
 function statisticsToCounts(statistics = []) {
   return statistics.reduce((result, row) => {
     const laneId = row.lane_id || row.lane_name || "lane";

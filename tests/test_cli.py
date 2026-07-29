@@ -151,7 +151,7 @@ def test_counting_parse_args_minimal() -> None:
         args = counting_parse_args()
         assert args.video == Path("test.mp4")
         assert args.config == Path("config.json")
-        assert args.model == "models/yolov8n.pt"
+        assert args.model == "yolov8n.pt"
         assert args.conf == 0.25
     finally:
         sys.argv = old_argv

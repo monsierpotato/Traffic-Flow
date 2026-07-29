@@ -5,7 +5,7 @@ from shared.config import settings
 def validate_video_file(file: UploadFile) -> UploadFile:
     """Validates the uploaded file size, extension and mime type."""
     # 1. Validate Extension
-    filename = file.filename
+    filename = file.filename or ""
     _, ext = os.path.splitext(filename.lower())
     if ext not in settings.ALLOWED_VIDEO_EXTENSIONS:
         raise HTTPException(
@@ -13,27 +13,35 @@ def validate_video_file(file: UploadFile) -> UploadFile:
             detail=f"Unsupported file extension {ext}. Allowed extensions: {', '.join(settings.ALLOWED_VIDEO_EXTENSIONS)}"
         )
 
-    # 2. Validate Size (read a chunk or check Content-Length if available)
-    # Check if we can get size via content-length
-    content_length = file.headers.get("content-length")
-    if content_length:
-        size_mb = int(content_length) / (1024 * 1024)
-        if size_mb > settings.MAX_FILE_SIZE_MB:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File is too large ({size_mb:.2f}MB). Max allowed size is {settings.MAX_FILE_SIZE_MB}MB."
-            )
-
-    # Alternatively, read file data in chunks to prevent memory blowup and check size
+    # Starlette's UploadFile is backed by a seekable spool. Check the actual
+    # size with a seek instead of scanning the entire file before the route
+    # copies it to the processing path.
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
-    chunk_size = 1024 * 1024  # 1MB
-    size = 0
-    first_chunk = None
+    try:
+        file.file.seek(0, os.SEEK_END)
+        size = file.file.tell()
+        file.file.seek(0)
+    except (AttributeError, OSError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not seekable",
+        ) from exc
 
-    # We read first chunk to validate magic bytes (MIME type)
-    first_chunk = file.file.read(chunk_size)
-    size += len(first_chunk)
-    
+    if size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty."
+        )
+    if size > max_bytes:
+        size_mb = size / (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File is too large ({size_mb:.2f}MB). Max allowed size is {settings.MAX_FILE_SIZE_MB}MB."
+        )
+
+    # Read only the first chunk for magic-byte/MIME validation, then restore
+    # the cursor so saving starts at byte zero.
+    first_chunk = file.file.read(min(1024 * 1024, size))
     if not first_chunk:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,18 +72,6 @@ def validate_video_file(file: UploadFile) -> UploadFile:
             detail=f"Invalid MIME type {mime}. The file must be a valid video."
         )
 
-    # Verify rest of the size
-    while True:
-        chunk = file.file.read(chunk_size)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB."
-            )
-
-    # Reset file pointer so it can be read again for saving
+    # Reset file pointer so the route can copy the complete upload.
     file.file.seek(0)
     return file

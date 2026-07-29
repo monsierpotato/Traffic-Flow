@@ -1,6 +1,13 @@
 import logging
 import os
-os.environ["NO_PROXY"] = "localhost,127.0.0.1"
+
+_no_proxy_entries = {
+    entry.strip()
+    for entry in os.environ.get("NO_PROXY", "").split(",")
+    if entry.strip()
+}
+_no_proxy_entries.update({"localhost", "127.0.0.1"})
+os.environ["NO_PROXY"] = ",".join(sorted(_no_proxy_entries))
 
 import time
 import json
@@ -11,8 +18,8 @@ import numpy as np
 from celery import Celery
 from shared.config import settings
 from shared.r2_client import r2_client
-from worker.pipeline.ai_client import InferenceClient
-from worker.pipeline.local_client import LocalInferenceClient
+from shared.safe_errors import safe_error_message
+from worker.pipeline.inference_factory import build_inference_client
 from worker.pipeline.processor import FrameProcessor, FrameTransform, resolve_geometry_space
 from worker.pipeline.tracker import LocalTracker
 from worker.pipeline.renderer import FrameRenderer
@@ -35,7 +42,10 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_ignore_result=True,
-    task_store_errors_even_if_ignored=False,
+    task_store_errors_even_if_ignored=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True,
     task_default_queue=settings.CELERY_QUEUE_NAME,
 )
 
@@ -53,10 +63,10 @@ def _send_callback(url: str, payload: dict):
         }, method="PUT",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             logger.info(f"Callback {resp.status}")
     except Exception as e:
-        logger.error(f"Callback failed: {e}")
+        logger.error("Callback failed for status=%s: %s", payload.get("status"), e.__class__.__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -88,14 +98,22 @@ def _warn_points_outside_processing_bounds(lanes: list, width: int, height: int,
 
 def _download_video_to_path(url: str, destination_path: str) -> float:
     import requests
-    logger.info(f"Downloading video: {url}")
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    logger.info("Downloading video artifact")
     start = time.perf_counter()
     with requests.Session() as s:
         resp = s.get(url, timeout=120, stream=True)
         resp.raise_for_status()
+        content_length = resp.headers.get("content-length")
+        if content_length and int(content_length) > max_bytes:
+            raise ValueError("Downloaded video exceeds the configured size limit")
+        total_bytes = 0
         with open(destination_path, "wb") as fp:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        raise ValueError("Downloaded video exceeds the configured size limit")
                     fp.write(chunk)
     return (time.perf_counter() - start) * 1000.0
 
@@ -110,7 +128,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
     temp_video_path = None
     temp_out_path = None
     cap = None
-    ai_client: InferenceClient = None
+    ai_client: object | None = None
     out_video = None
     task_start = time.perf_counter()
     profiler = PipelineProfiler()
@@ -218,21 +236,12 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             roi_mode=settings.ROI_MODE,
             enable_stabilization=settings.AI_ENABLE_STABILIZATION,
         )
-        # Use local YOLO when AI_LOCAL=true, otherwise Modal GPU
-        if os.environ.get("AI_LOCAL", "").lower() in ("1", "true", "yes") or settings.AI_LOCAL:
-            logger.info(f"Using LOCAL YOLO GPU inference | model={settings.resolved_model_path()} imgsz={settings.AI_IMGSZ} half={settings.AI_HALF}")
-            ai_client = LocalInferenceClient(max_workers=1)
-        else:
-            ai_client = InferenceClient(
-                base_url=settings.AI_SERVING_URL,
-                max_workers=2,
-                request_timeout=30,
-            )
+        ai_client = build_inference_client(max_workers=2)
         tracker = LocalTracker(
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        counter = CountingState(lanes_processing)
+        counter = CountingState(lanes_processing, settings=lane_config.get("settings"))
         renderer = FrameRenderer(lanes_processing, settings_obj=settings)
 
         # Stabilisation reference frame
@@ -254,7 +263,11 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Output video ---
         f_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         temp_out_path = f_out.name; f_out.close()
-        fourcc = cv2.VideoWriter_fourcc(*"vp90")
+        # VP9 in an MP4 container is poorly supported by browsers and many
+        # downstream players. Prefer the broadly compatible MPEG-4 fallback;
+        # deployments with an H.264-enabled OpenCV build can override this
+        # through the existing transcode stage.
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out_video = cv2.VideoWriter(temp_out_path, fourcc, fps, (out_w, out_h))
         if not out_video.isOpened():
             raise RuntimeError(f"Could not open output video writer for {out_w}x{out_h} at {fps:.2f} FPS")
@@ -460,13 +473,22 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         return {"status": "completed", "task_id": task_id}
 
     except Exception as e:
-        logger.error(f"Task {task_id} FAILED: {e}", exc_info=True)
+        logger.error(
+            "Task %s FAILED: %s",
+            task_id,
+            safe_error_message(e),
+            exc_info=True,
+        )
         close_ai_client()
+        safe_detail = safe_error_message(e)
         _send_callback(callback_url, {
-            "status": "failed", "progress": 0, "error_message": str(e),
-            "stage": "failed", "stage_detail": str(e),
+            "status": "failed", "progress": 0, "error_message": safe_detail,
+            "stage": "failed", "stage_detail": safe_detail,
         })
-        return {"status": "failed", "task_id": task_id, "error": str(e)}
+        # Preserve the failure in Celery as well as in the API callback. A
+        # returned error dict would make the broker consider this task
+        # successful and would hide worker failures from monitoring.
+        raise
 
     finally:
         if cap is not None:

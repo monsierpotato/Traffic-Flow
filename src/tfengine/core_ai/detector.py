@@ -36,7 +36,7 @@ class YoloByteTrackDetector:
         try:
             from ultralytics import YOLO
         except ImportError as exc:
-            raise RuntimeError(
+            raise ImportError(
                 "Missing dependency 'ultralytics'. Install it to run Phase B: "
                 "python -m pip install ultralytics"
             ) from exc
@@ -93,6 +93,45 @@ class YoloByteTrackDetector:
             detections.append(
                 Detection(
                     track_id=int(track_id),
+                    class_id=class_id_int,
+                    class_name=class_name,
+                    confidence=float(conf),
+                    bbox_xyxy=tuple(float(v) for v in bbox),
+                )
+            )
+        return detections
+
+    def detect_raw(self, frame) -> List[Detection]:
+        """Run YOLO without ByteTrack state for the worker's local tracker."""
+        results = self.model.predict(
+            frame,
+            conf=self.confidence,
+            device=self.device,
+            classes=self.class_ids,
+            imgsz=self.imgsz,
+            verbose=False,
+        )
+        if not results:
+            return []
+
+        result = results[0]
+        if result.boxes is None:
+            return []
+        names = result.names
+        boxes = result.boxes.xyxy.cpu().tolist()
+        class_ids = result.boxes.cls.cpu().tolist()
+        confidences = result.boxes.conf.cpu().tolist()
+
+        detections: List[Detection] = []
+        for bbox, class_id, conf in zip(boxes, class_ids, confidences):
+            class_id_int = int(class_id)
+            class_name = self.class_name_map.get(class_id_int, str(names.get(class_id_int, class_id_int)))
+            class_name = _CLASS_ALIASES.get(class_name, class_name)
+            if class_name not in self.classes:
+                continue
+            detections.append(
+                Detection(
+                    track_id=-1,
                     class_id=class_id_int,
                     class_name=class_name,
                     confidence=float(conf),

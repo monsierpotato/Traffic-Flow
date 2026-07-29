@@ -1,6 +1,8 @@
 import copy
+import asyncio
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -8,9 +10,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.errors import PyMongoError, ServerSelectionTimeoutError
+from pymongo.errors import OperationFailure, PyMongoError, ServerSelectionTimeoutError
 
 from shared.config import settings
+from shared.safe_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +186,10 @@ class LocalJsonDatabase:
     def save(self):
         payload = {"_counter": self._counter, **self._data}
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+        serialized = json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2)
+        temporary_path = self.path.with_name(f".{self.path.name}.tmp")
+        temporary_path.write_text(serialized, encoding="utf-8")
+        os.replace(temporary_path, self.path)
 
 
 class _AsyncThreadLock:
@@ -262,21 +268,27 @@ def _restore_dates(value: Any, key: Optional[str] = None):
 
 
 async def connect_to_mongo():
-    logger.info("Connecting to MongoDB Atlas...")
+    logger.info("Connecting to configured MongoDB...")
+    ping_timeout_seconds = max(
+        settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+        settings.MONGODB_CONNECT_TIMEOUT_MS,
+    ) / 1000 + 0.5
     client_options = {
         "serverSelectionTimeoutMS": settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
         "connectTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+        "socketTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
     }
     if settings.MONGODB_TLS or settings.MONGODB_URI.startswith("mongodb+srv://"):
         client_options["tlsCAFile"] = certifi.where()
     client = AsyncIOMotorClient(settings.MONGODB_URI, **client_options)
     try:
-        await client.admin.command("ping")
+        await asyncio.wait_for(client.admin.command("ping"), timeout=ping_timeout_seconds)
         db_instance.client = client
         db_instance.db = client[settings.MONGODB_DB_NAME]
         db_instance.using_local_fallback = False
+        await _ensure_mongo_indexes(db_instance.db)
         logger.info("Connected to MongoDB successfully!")
-    except (ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
+    except (asyncio.TimeoutError, ServerSelectionTimeoutError, PyMongoError, OSError) as exc:
         client.close()
         if not settings.MONGODB_LOCAL_FALLBACK:
             raise
@@ -285,9 +297,70 @@ async def connect_to_mongo():
         db_instance.using_local_fallback = True
         logger.warning(
             "MongoDB unavailable (%s). Falling back to local JSON DB at %s",
-            exc,
+            safe_error_message(exc),
             settings.LOCAL_DB_PATH,
         )
+
+
+async def _ensure_mongo_indexes(database) -> None:
+    """Create the query indexes used by task polling and result aggregation."""
+    indexes = (
+        (database.tasks, "task_id", {"unique": True, "name": "uq_tasks_task_id"}),
+        (database.tasks, "video_id", {"name": "ix_tasks_video_id"}),
+        (database.tasks, "status", {"name": "ix_tasks_status"}),
+        (database.tasks, "expires_at", {"name": "ix_tasks_expires_at"}),
+        (database.lane_configs, "video_id", {"unique": True, "name": "uq_lane_configs_video_id"}),
+        (database.lane_configs, "task_id", {"name": "ix_lane_configs_task_id"}),
+        (database.traffic_statistics, "task_id", {"name": "ix_traffic_statistics_task_id"}),
+    )
+    for collection, field, options in indexes:
+        try:
+            await collection.create_index(field, **options)
+        except OperationFailure as exc:
+            # Deployments created before named indexes were introduced may
+            # already have an equivalent index under MongoDB's generated
+            # name (for example, ``task_id_1``).  MongoDB reports that as
+            # IndexOptionsConflict even though the required index is usable.
+            if exc.code == 85:
+                try:
+                    existing_indexes = await collection.index_information()
+                except Exception:
+                    existing_indexes = {}
+
+                matching_index = next(
+                    (
+                        (name, details)
+                        for name, details in existing_indexes.items()
+                        if details.get("key") == [(field, 1)]
+                    ),
+                    None,
+                )
+                if matching_index:
+                    index_name, index_details = matching_index
+                    unique_required = options.get("unique") is True
+                    unique_matches = not unique_required or index_details.get("unique") is True
+                    if unique_matches:
+                        logger.info(
+                            "MongoDB index %s.%s already exists as %s; keeping it",
+                            collection.name,
+                            field,
+                            index_name,
+                        )
+                    else:
+                        logger.warning(
+                            "MongoDB index %s.%s exists as %s but is not unique; "
+                            "manual index migration is required",
+                            collection.name,
+                            field,
+                            index_name,
+                        )
+                    continue
+
+            logger.exception("Could not create MongoDB index %s on %s", options.get("name"), collection.name)
+        except Exception:
+            # Index creation must not hide an otherwise healthy API startup;
+            # MongoDB logs the concrete reason and the next deploy can retry.
+            logger.exception("Could not create MongoDB index %s on %s", options.get("name"), collection.name)
 
 
 async def close_mongo_connection():
@@ -296,6 +369,8 @@ async def close_mongo_connection():
         db_instance.client.close()
         logger.info("MongoDB connection closed.")
     db_instance.client = None
+    db_instance.db = None
+    db_instance.using_local_fallback = False
 
 
 def get_database():

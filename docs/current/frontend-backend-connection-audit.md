@@ -17,7 +17,7 @@ UploadStep.acceptFile
           -> validate_video_file
           -> save_upload_to_temp
           -> create_uploaded_video_task_from_path
-          -> { task_id: video_id, preview_url, ... }
+        -> { task_id, video_id, preview_url, ... }
     -> fetchPreview
       -> GET /videos/{task_id}/preview
     -> RoiMaskingStep -> LaneEditorStep
@@ -34,17 +34,17 @@ UploadStep.acceptFile
     -> fetchResult -> GET /tasks/{task_id}/result
 ```
 
-The upload response intentionally aliases `video_id` as `task_id` in the compatibility route. Subsequent compatibility routes resolve either identifier, so preview, submit, polling, and result retrieval use the same ID correctly.
+The compatibility route returns the canonical task ID separately from the video ID. Preview/media paths resolve the video ID, while submit, polling, result retrieval, and Celery callbacks use the task ID. Legacy callers that still pass a video ID remain supported through `find_task`.
 
 ### Live Processing
 
 ```text
 handleLiveResolve
-  -> POST /live/resolve
+  -> POST /live/resolve (source_id; signed media URL remains server-side)
   -> GET /live/sources/{source_id}/preview (using returned preview_url)
   -> buildLaneConfig
   -> validateLiveConfig -> POST /live/validate-config
-  -> createLiveSession -> POST /live/sessions
+  -> createLiveSession -> POST /live/sessions ({source_id, source_url, lane_config})
   -> fetchLiveSession -> GET /live/sessions/{session_id}
   -> MJPEG GET /live/sessions/{session_id}/stream
   -> stopLive -> DELETE /live/sessions/{session_id}
@@ -57,7 +57,7 @@ handleLiveResolve
 |---|---|---|
 | `apiRequest` | Upload, live, and task calls | Connected; parses JSON/text and preserves status/code/details |
 | `apiBlob` | Preview retrieval | Connected; returns an image blob and handles JSON error payloads |
-| `normalizeSource` | Upload response | Connected; maps compatibility `task_id`/`video_id` |
+| `normalizeSource` | Upload response | Connected; preserves separate compatibility `task_id` and `video_id` |
 | `normalizeTaskStatus` | Submit and polling | Connected; preserves backend `stage_detail` and normalized `detail` |
 | `normalizeAnalyticsResult` | Result dashboard | Connected; maps compatibility `counts`/`outputs`/`total_count` |
 | `normalizeLiveSession` | Live creation and polling | Connected; maps `session_id` and runtime counters |
@@ -81,7 +81,8 @@ handleLiveResolve
 
 ## Intentional Boundaries
 
-- The frontend does not call `/api/v1/*` directly; the root compatibility routes are the active UI contract.
+- The frontend uses the root compatibility routes as its active UI contract; those routes now adapt to the canonical versioned task/database contract without aliasing identifiers.
+- `/ready` is the frontend runtime signal. HTTP 503 is rendered as `Runtime degraded` when persistence, queue, model, or worker readiness is incomplete; it is not presented as a healthy API.
 - Worker progress callbacks are internal and are not called from browser code.
 - The output MJPEG URL is intentionally a stream URL, not an image blob URL.
 - Vercel hosts only the static React application. FastAPI, Celery, Redis, model inference, and persistent storage remain outside Vercel.

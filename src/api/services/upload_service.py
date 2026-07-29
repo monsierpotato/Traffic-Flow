@@ -1,19 +1,32 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import logging
 import os
+import shutil
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, UploadFile, status
 
 from api.services.video_service import extract_first_frame_path, normalize_video_path, VideoMeta
 from shared.config import settings
 from shared.r2_client import r2_client
 
 logger = logging.getLogger(__name__)
+
+_UPLOAD_COPY_BUFFER = 8 * 1024 * 1024
+_UPLOAD_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="trafficflow-upload")
+
+
+async def _run_blocking(fn, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_UPLOAD_EXECUTOR, partial(fn, *args, **kwargs))
 
 
 @dataclass(frozen=True)
@@ -45,12 +58,60 @@ def _color_meta(meta: VideoMeta) -> dict:
     }
 
 
-def _save_local_preview(video_id: str, preview_bytes: bytes, request: Request) -> str:
+def _save_local_preview(video_id: str, preview_bytes: bytes) -> None:
     local_preview_dir = Path(settings.STORAGE_DIR) / "previews"
     local_preview_dir.mkdir(parents=True, exist_ok=True)
     (local_preview_dir / f"{video_id}.jpg").write_bytes(preview_bytes)
-    base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/static/previews/{video_id}.jpg"
+
+
+def _copy_upload_file(source, destination: str) -> None:
+    with open(destination, "wb") as target:
+        shutil.copyfileobj(source, target, length=_UPLOAD_COPY_BUFFER)
+
+
+async def save_upload_to_temp(file: UploadFile) -> str:
+    """Copy a validated upload to a processing path without blocking the loop.
+
+    ``UploadFile.read`` would schedule one thread-pool operation per chunk and
+    the destination write would still happen on the event-loop thread. A
+    single buffered copy in a worker thread keeps both operations off the API
+    loop and reduces Python-level per-chunk overhead.
+    """
+    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    try:
+        await file.seek(0)
+        await _run_blocking(_copy_upload_file, file.file, temp_path)
+        return temp_path
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+async def _delete_uploaded_keys(keys: list[str]) -> None:
+    for key in keys:
+        try:
+            await _run_blocking(r2_client.delete_file, key)
+        except Exception:
+            logger.warning("Could not delete uploaded key after failure: %s", key)
+
+
+async def _unlink_path(path: str | Path | None) -> None:
+    if path:
+        try:
+            await _run_blocking(os.unlink, path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("Could not delete temp path: %s", path)
+
+
+async def _delete_local_preview(video_id: str) -> None:
+    await _unlink_path(Path(settings.STORAGE_DIR) / "previews" / f"{video_id}.jpg")
 
 
 def _task_document(
@@ -63,6 +124,9 @@ def _task_document(
     original_meta: VideoMeta,
     working_meta: VideoMeta,
     transcode_ms: float,
+    ingest_ms: float,
+    storage_ms: float,
+    preview_ms: float,
     stored_original: bool,
     original_video_url: Optional[str],
     original_video_key: Optional[str],
@@ -97,6 +161,9 @@ def _task_document(
         "working_size_mb": _mb(working_meta.size_bytes),
         "working_video_meta": _color_meta(working_meta),
         "transcode_ms": round(transcode_ms, 0),
+        "ingest_ms": round(ingest_ms, 0),
+        "storage_ms": round(storage_ms, 0),
+        "preview_ms": round(preview_ms, 0),
         "created_at": now,
         "updated_at": now,
         "expires_at": expires_at,
@@ -105,7 +172,6 @@ def _task_document(
 
 async def create_uploaded_video_task_from_path(
     *,
-    request: Request,
     db,
     video_path: str | Path,
     content_type: str = "video/mp4",
@@ -115,42 +181,59 @@ async def create_uploaded_video_task_from_path(
     uploaded_keys = []
     working_path = None
     owns_working_path = False
+    ingest_started = time.perf_counter()
 
     try:
-        working_path, original_meta, working_meta, transcode_ms, owns_working_path = normalize_video_path(video_path)
+        working_path, original_meta, working_meta, transcode_ms, owns_working_path = await _run_blocking(
+            normalize_video_path, video_path
+        )
 
         stored_original = bool(settings.STORE_ORIGINAL_VIDEO)
         working_key = f"uploads/{video_id}_1080p.mp4"
+        storage_started = time.perf_counter()
 
         if stored_original:
             original_key = f"uploads/{video_id}.mp4"
-            original_url = r2_client.upload_path(video_path, original_key, content_type or "video/mp4")
+            original_url = await _run_blocking(
+                r2_client.upload_path, video_path, original_key, content_type or "video/mp4"
+            )
             uploaded_keys.append(original_key)
-            working_url = r2_client.upload_path(working_path, working_key, "video/mp4")
+            working_url = await _run_blocking(
+                r2_client.upload_path, working_path, working_key, "video/mp4"
+            )
             uploaded_keys.append(working_key)
             video_url = original_url
             original_video_url = original_url
             original_video_key = original_key
         else:
             working_key = f"uploads/{video_id}.mp4"
-            working_url = r2_client.upload_path(working_path, working_key, "video/mp4")
+            working_url = await _run_blocking(
+                r2_client.upload_path, working_path, working_key, "video/mp4"
+            )
             uploaded_keys.append(working_key)
             video_url = working_url
             original_video_url = None
             original_video_key = None
+        storage_ms = (time.perf_counter() - storage_started) * 1000.0
 
+        preview_started = time.perf_counter()
         try:
-            preview_bytes = extract_first_frame_path(working_path)
+            preview_bytes = await _run_blocking(extract_first_frame_path, working_path)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Could not extract preview frame from video: {exc}",
+                detail="Could not extract a preview frame from the uploaded video.",
             ) from exc
 
         preview_key = f"previews/{video_id}.jpg"
-        r2_client.upload_file(preview_bytes, preview_key, "image/jpeg")
+        preview_url = await _run_blocking(
+            r2_client.upload_file, preview_bytes, preview_key, "image/jpeg"
+        )
         uploaded_keys.append(preview_key)
-        preview_url = _save_local_preview(video_id, preview_bytes, request)
+        # Keep a local copy for the compatibility route, but return the
+        # storage URL so production replicas do not depend on local disk.
+        await _run_blocking(_save_local_preview, video_id, preview_bytes)
+        preview_ms = (time.perf_counter() - preview_started) * 1000.0
 
         task_doc = _task_document(
             video_id=video_id,
@@ -161,6 +244,9 @@ async def create_uploaded_video_task_from_path(
             original_meta=original_meta,
             working_meta=working_meta,
             transcode_ms=transcode_ms,
+            ingest_ms=(time.perf_counter() - ingest_started) * 1000.0,
+            storage_ms=storage_ms,
+            preview_ms=preview_ms,
             stored_original=stored_original,
             original_video_url=original_video_url,
             original_video_key=original_video_key,
@@ -187,50 +273,17 @@ async def create_uploaded_video_task_from_path(
             working_meta=working_meta,
         )
     except HTTPException:
-        for key in uploaded_keys:
-            try:
-                r2_client.delete_file(key)
-            except Exception:
-                logger.warning("Could not delete uploaded key after failure: %s", key)
+        await _delete_uploaded_keys(uploaded_keys)
+        await _delete_local_preview(video_id)
         raise
     except Exception as exc:
-        for key in uploaded_keys:
-            try:
-                r2_client.delete_file(key)
-            except Exception:
-                logger.warning("Could not delete uploaded key after failure: %s", key)
+        await _delete_uploaded_keys(uploaded_keys)
+        await _delete_local_preview(video_id)
+        logger.exception("Upload processing failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while uploading: {exc}",
+            detail="An error occurred while uploading the video.",
         ) from exc
     finally:
         if owns_working_path and working_path and os.path.exists(working_path):
-            try:
-                os.unlink(working_path)
-            except Exception:
-                logger.warning("Could not delete temp working video: %s", working_path)
-
-
-async def create_uploaded_video_task(
-    *,
-    request: Request,
-    db,
-    video_bytes: bytes,
-    content_type: str = "video/mp4",
-) -> UploadedVideo:
-    temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    try:
-        temp_video.write(video_bytes)
-        temp_video.close()
-        return await create_uploaded_video_task_from_path(
-            request=request,
-            db=db,
-            video_path=temp_video.name,
-            content_type=content_type,
-        )
-    finally:
-        if os.path.exists(temp_video.name):
-            try:
-                os.unlink(temp_video.name)
-            except Exception:
-                logger.warning("Could not delete temp upload video: %s", temp_video.name)
+            await _unlink_path(working_path)
