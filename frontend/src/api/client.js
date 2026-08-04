@@ -12,9 +12,10 @@ export function apiUrl(path) {
 }
 
 function assertApiConfiguration(path) {
-  if (import.meta.env.PROD && !API_BASE_URL && !ABSOLUTE_URL_PATTERN.test(path)) {
-    throw new Error("VITE_API_BASE_URL is not configured for this deployment.");
-  }
+  // Same-origin deployments (frontend served by the FastAPI container) rely on
+  // relative paths, so no explicit base URL is required. Upstream asserted
+  // unconditionally in PROD because their frontend is deployed separately
+  // (Vercel) from the backend; that check is intentionally disabled here.
 }
 
 export async function apiRequest(path, options = {}) {
