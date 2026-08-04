@@ -2,6 +2,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -12,6 +15,9 @@ services:
     image: trafficflow:latest
     ports:
       - "8000:8000"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     env_file:
       - .env
     environment:
@@ -53,6 +59,7 @@ services:
       - YTDLP_JS_RUNTIME=node
       - YTDLP_REMOTE_COMPONENTS=ejs:github
     volumes:
+      - ./storage:/app/storage
       - C:/Users/ADMIN/Downloads/cookies.txt:/run/secrets/youtube_cookies.txt:ro
     depends_on:
       redis:
@@ -71,6 +78,9 @@ services:
     build: .
     image: trafficflow:latest
     command: celery -A worker.celery_app worker --pool=prefork --concurrency=1 -Q trafficflow_gpu_queue --loglevel=info
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     env_file:
       - .env
     environment:
@@ -100,6 +110,8 @@ services:
       - LIVE_FFMPEG_OUTPUT_FPS=15
       - LIVE_FFMPEG_REALTIME_PACING=true
       - LIVE_FFMPEG_RW_TIMEOUT_US=10000000
+    volumes:
+      - ./storage:/app/storage
     depends_on:
       redis:
         condition: service_healthy
