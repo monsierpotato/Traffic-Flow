@@ -18,6 +18,11 @@ Thumbs.db
 .vscode/
 .idea/
 .codex/
+.agents/
+.commandcode/
+.agent_scratchpad.md
+.git-rewrite-backup/
+src/*.egg-info/
 
 # Benchmark data and generated outputs
 data/raw_videos/*.mp4
@@ -39,6 +44,35 @@ benchmark_results/outputs/**/*.png
 outputs/
 kaggle.json
 **/access_token
+
+# Local runtime/debug artifacts
+scratch/
+runs/
+storage/
+test.mp4
+*.log
+
+# Benchmark local datasets and generated artifacts
+benchmark/detrac/ua-detrac-orig/
+benchmark/detrac/ua-detrac-orig.zip
+benchmark/detrac/videos/
+benchmark/predictions/
+benchmark/runs/
+benchmark/ground_truth/
+benchmark/**/__pycache__/
+benchmark/annotation/frames/
+benchmark/annotation/manual_overlays/
+benchmark/annotation/*.jpg
+benchmark/annotation/*.png
+benchmark/reports/**/*.mp4
+benchmark/reports/**/*.avi
+benchmark/reports/**/*.mov
+benchmark/reports/phase09_error_frames/
+benchmark/reports/MVI_*
+benchmark/reports/optimized-*
+benchmark/reports/summary.*
+benchmark/reports/summary_*.csv
+benchmark/reports/benchmark_report.md
 
 # External cloned model repos
 repos/

@@ -1,5 +1,125 @@
 # TrafficFlow Wiki Log
 
+## [2026-07-18] benchmark | Phase 09 Ablation And Error Analysis
+
+- Generated Phase 09 artifacts from frozen Phase 04-08 evidence using `benchmark/phase09_analysis.py`.
+- Outputs: `benchmark/reports/ablation_report.md`, `benchmark/reports/ablation_summary.csv`, `benchmark/reports/error_taxonomy.csv`, `benchmark/reports/phase09_error_examples.csv`, and representative frames under `benchmark/reports/phase09_error_frames/`.
+- Tracker finding: direct ByteTrack remains the stronger held-out E2E baseline than `trafficflow_production` (`Event F1 0.942238` vs `0.835294`, IDSW `42` vs `169`, WAPE `0.050360` vs `0.194245`).
+- ROI finding: formal full-frame vs crop-ROI AP/Event F1/WAPE is blocked because selected UA-DETRAC sequences do not have frozen crop ROI GT and the live crop source has no GT.
+- Live scheduling finding: current realtime latest-frame loop has 14.895 FPS, drop ratio 0.0, frame-age p95 0.9 ms; historical pending-future evidence remains partial because old frame-age/idle instrumentation was unavailable.
+- Updated portfolio error analysis, limitations, release checklist, final report, README, Phase 09 report, and wiki mirror.
+
+## [2026-07-18] portfolio | Phase 10-12 GitHub/CV/Release Package
+
+- Rewrote `README.md` into the required recruiter/interviewer structure: problem, demo placeholder, key results, team scope, personal contribution, AI pipeline, benchmark methodology, results, runtimes, error analysis, limitations, architecture, reproduction, and attribution.
+- Added portfolio pages: `docs/portfolio/recruiter-overview.md`, `docs/portfolio/ai-pipeline.md`, `docs/portfolio/error-analysis.md`, `docs/portfolio/limitations.md`, and updated the wiki index to surface them.
+- Added CV/interview package: `docs/portfolio/cv/trafficflow-cv-bullets.md`, `docs/portfolio/cv/trafficflow-interview-answers.md`, and `docs/portfolio/cv/trafficflow-evidence-map.md`.
+- Added final release gate artifacts: `benchmark/reports/final_portfolio_report.md`, `docs/portfolio/release-checklist.md`, and `docs/reports/phase-12-final-review.md`.
+- Historical note: at the time of this entry, Phase 09 had not yet been run because the user requested Phase 10-12 directly after Phase 08. The later Phase 09 entry above supersedes that limitation.
+
+## [2026-07-18] benchmark | Phase 08 Live/HLS Runtime
+
+- Added `benchmark/live_runtime_eval.py` and `tests/test_live_runtime_eval.py` for API-driven live/HLS soak benchmarking with raw runtime timeseries and resource timeseries.
+- Captured a 1920x1080 preview from `https://youtu.be/sJvEFrG0wq0`, added live geometry at `benchmark/configs/geometry_live/YT_sJvEFrG0wq0_live.json`, and validated it through `/live/validate-config`.
+- Ran the minimum protocol soak for 1803.284 seconds with 60 seconds warmup and 5-second sampling on YouTube HLS, `models/yolo11m.pt`, `AI_IMGSZ=640`, `roi_mode=crop_rect`, `frame_skip=1`.
+- Result: processed FPS 14.895 overall, published FPS 14.895 overall, processed/published FPS p50/p95/p99 15.0 / 15.2 / 15.2, frame age p50/p95/p99 0.8 / 0.9 / 1.0 ms, inference wall p50/p95/p99 14.8 / 24.03 / 26.553 ms.
+- Stability: 26877 frames read, 26860 frames processed, 0 dropped frames, dropped-frame ratio 0.0, stale-frame sample ratio 0.0, reconnect count 0, stall count/hour 0.0, session error count 0, unexpected tracker reset count 0.
+- Resources: GPU util avg/p95 15.442% / 24.1%, VRAM peak 2525 MB, API container RAM 1815.552 MB start / 2132.992 MB end / 2137.088 MB peak.
+- Wrote `benchmark/reports/live_runtime_report.md`, `benchmark/reports/live_runtime_timeseries.csv`, `benchmark/reports/live_resource_timeseries.csv`, `docs/portfolio/runtime-optimization-case-study.md`, Phase 08 report, and wiki mirror. STOP GATE reached before Phase 09.
+
+## [2026-07-18] benchmark | Phase 07 Uploaded-Video Runtime
+
+- Added `benchmark/batch_runtime_eval.py` and `tests/test_batch_runtime_eval.py` to measure the full local uploaded-video AI path: decode, full-frame resize/letterbox, YOLO/ByteTrack inference, lane/class filter, optional TrafficFlow `LocalTracker`, counting, overlay render, and output encode.
+- Ran Docker GPU benchmark on `models/yolov8m.pt`, `imgsz=640`, `device=0`, manual geometry, and 10 warmup frames per result.
+- Compared `bytetrack` and `trafficflow_production` on `MVI_20035`, `MVI_20012`, and the longest available selected development sequence `MVI_40241`.
+- Best available workload result was `available_max_MVI_40241`: `bytetrack` 75.829 processed FPS / RTF 3.033 / total p95 14.782 ms; `trafficflow_production` 75.846 processed FPS / RTF 3.034 / total p95 15.018 ms.
+- Wrote `benchmark/reports/batch_runtime_report.md`, `benchmark/reports/batch_runtime_summary.csv`, `benchmark/reports/stage_latency.csv`, `benchmark/reports/resource_usage.csv`, Phase 07 report, and wiki mirror. STOP GATE reached before Phase 08 live/HLS soak.
+- Scope note: current frozen UA-DETRAC benchmark-safe inputs are 960x540 and max out at about 93 seconds, so 1080p, 3-5 minute, and 10+ minute upload-runtime results remain blocked on suitable source videos.
+
+## [2026-07-18] benchmark | End-to-End ByteTrack vs Production
+
+- Added `benchmark/end_to_end_eval.py` and `tests/test_end_to_end_eval.py` to run full YOLOv8m + tracker + counting benchmark branches.
+- Compared direct `bytetrack` against current `trafficflow_production` path, which runs YOLO/ByteTrack detections through TrafficFlow `LocalTracker` before counting.
+- Development result favored ByteTrack: HOTA 0.249929 vs 0.201410, IDF1 0.403836 vs 0.306618, Event F1 0.849005 vs 0.734821, WAPE 0.202465 vs 0.305458.
+- Held-out result also favored ByteTrack: HOTA 0.242433 vs 0.215225, IDF1 0.284952 vs 0.224661, Event F1 0.942238 vs 0.835294, WAPE 0.050360 vs 0.194245.
+- Recommendation: use direct ByteTrack as the measured end-to-end baseline candidate, then run live/upload regression before changing production defaults.
+
+## [2026-07-18] benchmark | Phase 06 Counting Benchmark
+
+- Added `benchmark/counting_eval.py` with one-to-one event matching by video, lane, class, direction, and 5-frame temporal tolerance.
+- Added event-level metrics, aggregate video x lane x class x direction metrics, error categories, and consistency checks for accepted prediction events vs aggregate counts.
+- Ran oracle counting benchmark from Phase 03 GT-backed prediction events against Phase 02 derived GT: development 1136 TP / 0 FP / 0 FN, held-out 278 TP / 0 FP / 0 FN.
+- Reported development and held-out Event F1 1.0000, WAPE 0.0000, duplicate rate 0.0000, miss rate 0.0000.
+- Added `benchmark/reports/counting_report.md`, `benchmark/reports/counting_summary.csv`, `benchmark/reports/counting_event_matches.csv`, `benchmark/reports/counting_errors.csv`, Phase 06 report, and wiki mirror. STOP GATE reached before Phase 07.
+
+## [2026-07-18] benchmark | Manual Geometry Refresh for Phase 02/03
+
+- Added `benchmark/annotation/audit_manual_geometry.py` for repeatable manual geometry validation and overlay/contact-sheet generation.
+- Normalized 14 manual geometry configs under `benchmark/configs/geometry_manual/`: 28 lane polygons, 38 mechanical closure/intersection fixes, 0 remaining issues, 0 remaining warnings.
+- Preserved user-drawn counting lines and direction vectors; backup is `benchmark/configs/geometry_manual_backup_20260718-040911/`.
+- Regenerated Phase 02 with `--geometry-source manual`: 1458 derived events, 69 count rows, 50 audit samples.
+- Reran Phase 03 smoke over all 14 selected sequences: `benchmark/runs/phase03-smoke-manual-geometry-20260718/`, 214311 raw GT rows and 1458 raw counting events.
+- Updated Phase 02/03 reports, wiki mirrors, portfolio geometry page, and benchmark README to make manual geometry the active baseline.
+
+## [2026-07-18] benchmark | Phase 04 Detection Benchmark
+
+- Added `benchmark/detection_eval.py` for detector-only UA-DETRAC evaluation with AP50, AP50-95, precision, recall, F1, per-class metrics, FP/FN per frame, and latency p50/p95.
+- Reran sampled development comparison in Docker GPU on `yolo11m.pt`, `yolov8n.pt`, `yolov8s.pt`, and `yolov8m.pt` with `frame_stride=100`, `imgsz=640`, and `device=0`.
+- Selected `models/yolov8m.pt` on development: AP50 0.5950, AP50-95 0.4352, recall 0.7987, p95 18.468 ms.
+- Ran held-out once with selected `yolov8m.pt`: AP50 0.5820, AP50-95 0.4463, precision 0.7067, recall 0.6791, p95 17.918 ms.
+- Recorded key weakness: `truck` is weak because UA-DETRAC `van` is mapped to TrafficFlow `truck`; held-out truck AP50 0.0962 and recall 0.1471.
+- Added `benchmark/reports/detection_report.md`, `benchmark/reports/detection_summary.csv`, `benchmark/reports/model_selection.md`, Phase 04 report, and wiki mirror. STOP GATE reached before Phase 05; GPU rerun supersedes the earlier CPU diagnostic output.
+
+## [2026-07-18] benchmark | Phase 05 Tracking Benchmark
+
+- Installed `TrackEval 1.3.0` for official tracking metrics; pinned `opencv-python` back to 4.11.0.86 after 5.0.0.93 broke `cv2.KalmanFilter`.
+- Added `benchmark/tracking_eval.py` to convert UA-DETRAC GT detections and tracker outputs into MOTChallenge format for TrackEval.
+- Ran development oracle-detection tracker ablation over 8 development sequences: `iou_frame` vs `trafficflow_kalman`.
+- Development result: `iou_frame` HOTA 0.999936, IDF1 0.999949, IDSW 5, Frag 0; `trafficflow_kalman` HOTA 0.807351, IDF1 0.892666, IDSW 104, Frag 206.
+- Selected `iou_frame` on development and ran held-out once: HOTA 1.000000, IDF1 1.000000, IDSW 0, Frag 0.
+- Added tracking report artifacts, `docs/portfolio/tracking-design.md`, Phase 05 report, and wiki mirror. STOP GATE reached before Phase 06.
+
+## [2026-07-17] benchmark | Phase 02 Derived Counting Ground Truth
+
+- Added `benchmark/derived_gt.py` to generate source-frame bottom-center derived counting GT from frozen UA-DETRAC tracks and geometry.
+- Generated geometry v1 for 14 selected sequences under `benchmark/configs/geometry/`.
+- Generated derived event JSONL files under `benchmark/ground_truth/derived_events/` and per-sequence count CSV files under `benchmark/ground_truth/counts/`.
+- Added combined counts summary at `benchmark/ground_truth/counts/counts_summary_v1.csv`: 903 events total, with 788 car, 82 truck, and 33 bus events.
+- Added audit sample and contact sheet under `benchmark/ground_truth/audit/`: 46 sampled events, satisfying the 5% audit rule.
+- Added portfolio methodology page `docs/portfolio/lane-geometry-and-counting.md`, Phase 02 report, and wiki mirror [[Phase 02 Derived Ground Truth]].
+
+## [2026-07-17] benchmark | Phase 03 Unified Benchmark Runner
+
+- Added `benchmark/run.py` as the reproducible benchmark entry point for protocol/split/model/config/geometry/output driven runs.
+- Added run config `benchmark/configs/runs/yolo11m_640.yaml`.
+- Added manifest and summary schemas under `benchmark/schemas/`.
+- Added `benchmark/README.md` with the Phase 03 smoke command and required artifact layout.
+- Ran frontend-free smoke run `benchmark/runs/phase03-smoke-derived-gt-20260717/` on `MVI_20011`.
+- Smoke result: 7444 raw detection rows, 7444 raw track rows, 26 raw counting events, manifest/config snapshot retained.
+- Added Phase 03 report and wiki mirror [[Phase 03 Benchmark Runner]].
+- Status is `PASS`: tests, compileall, diff whitespace check, structured artifact checks, wiki link check, and secret scan passed.
+
+## [2026-07-17] benchmark | Phase 01 UA-DETRAC Split and Benchmark Protocol
+
+- Added full local UA-DETRAC inventory at `benchmark/splits/ua_detrac_inventory_v1.json`: 100 XML sequences with images, 60 official train, 40 official test, all 960x540.
+- Added frozen full-sequence split at `benchmark/splits/ua_detrac_split_v1.json`: 1 smoke sequence, 8 development sequences, 5 held-out test sequences, and 86 reserve-only sequences.
+- Added class mapping at `benchmark/configs/class_mapping_v1.yaml`: `car -> car`, `bus -> bus`, `van -> truck`, and `others -> ignored`; UA-DETRAC has no motorcycle-compatible label.
+- Added benchmark protocol at `benchmark/configs/benchmark_protocol_v1.yaml` covering detection, tracking, counting, runtime metrics, run-manifest requirements, coordinate spaces, and anti-leakage rules.
+- Added portfolio methodology at `docs/portfolio/benchmark-methodology.md`.
+- Added Phase 01 report at `docs/reports/phase-01-benchmark-protocol.md` and wiki mirror [[Phase 01 Benchmark Protocol]].
+- Status is `PASS`: tests, compileall, diff whitespace check, structured artifact checks, and secret scan passed.
+- STOP GATE: held-out test is frozen; await user confirmation before Phase 02 derived counting ground truth.
+
+## [2026-07-17] audit | Phase 00 Repository Audit and Baseline Freeze
+
+- Ingested `docs/raw/plan (2).md` as the next portfolio/benchmark plan and stopped at Phase 00.
+- Added the required Phase 00 report at `docs/reports/phase-00-repository-audit.md`.
+- Added ownership matrix at `docs/portfolio/project-scope-and-ownership.md`.
+- Added baseline artifacts under `benchmark/baseline/`: current defaults, host environment snapshot, and model SHA256 inventory.
+- Added wiki mirror page [[Phase 00 Repository Audit]].
+- Status is now `PASS` after a scoped baseline-fix pass: `.venv` pytest reports 151 passed, `compileall` passes, `git diff --check` passes, and `docker compose config` renders.
+- Fixed live local-client constructor mismatch, upload worker lane variable/crop-mode alignment, local YOLO class-id parsing, and stale config-default test expectations before moving to the next stop gate.
+
 ## [2026-07-15] lint | Wiki Health Check After Stable Live Baseline
 
 - Checked wiki index, log, Obsidian links, and relative Markdown links.

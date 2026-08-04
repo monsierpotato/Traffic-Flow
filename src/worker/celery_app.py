@@ -140,7 +140,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Parse lane config ---
         processing_roi = lane_config.get("processing_roi") or lane_config.get("annotation_roi")
         has_crop = bool(processing_roi)
-        use_detection_crop = has_crop and settings.ROI_MODE == "roi_crop"
+        use_detection_crop = has_crop and settings.ROI_MODE in ("crop_rect", "roi_crop")
         if use_detection_crop:
             cx = int(processing_roi.get("x", 0)); cy = int(processing_roi.get("y", 0))
             cw = int(processing_roi.get("width", 0)); ch = int(processing_roi.get("height", 0))
@@ -157,13 +157,31 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         lanes_source = lane_config.get("lanes", [])
         if not lanes_source:
             raise ValueError("No lanes in lane_config")
+        geometry_space = lane_config.get("geometry_space") or "source_frame"
+        if geometry_space not in {"source_frame", "crop_local"}:
+            raise ValueError(f"Unsupported geometry coordinate space: {geometry_space}")
+        lanes_processing = lanes_source
+        if use_detection_crop and geometry_space == "source_frame":
+            lanes_processing = FrameTransform(
+                full_w=width,
+                full_h=height,
+                crop_w=out_w,
+                crop_h=out_h,
+                ai_w=settings.ROI_INPUT_SIZE,
+                ai_h=settings.ROI_INPUT_SIZE,
+                offset_x=crop_rect[0],
+                offset_y=crop_rect[1],
+            ).shift_lanes_to_crop(lanes_source)
 
         # Polygon mask (source → cropped coords)
         poly_pts = lane_config.get("roi_polygon", [])
         poly_mask = None
         if poly_pts and len(poly_pts) >= 3 and use_detection_crop:
             src = np.array(poly_pts, dtype=np.float32).reshape(-1, 2)
-            poly_mask = (src - [crop_rect[0], crop_rect[1]]).astype(np.int32)
+            if geometry_space == "crop_local":
+                poly_mask = src.astype(np.int32)
+            else:
+                poly_mask = (src - [crop_rect[0], crop_rect[1]]).astype(np.int32)
             outside_poly = [tuple(map(float, p)) for p in poly_mask if p[0] < 0 or p[1] < 0 or p[0] > out_w or p[1] > out_h]
             if outside_poly:
                 logger.warning("roi_polygon has points outside processing ROI after shift: %s", outside_poly[:5])
@@ -171,7 +189,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         # --- Init pipeline stages ---
         processor = FrameProcessor(
             roi_input_size=settings.ROI_INPUT_SIZE,
-            roi_mode=settings.ROI_MODE,
+            roi_mode="roi_crop" if use_detection_crop else settings.ROI_MODE,
             enable_stabilization=settings.AI_ENABLE_STABILIZATION,
         )
         # Use local YOLO when AI_LOCAL=true, otherwise Modal GPU
@@ -188,8 +206,8 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
             match_threshold=settings.TRACK_MATCH_THRESHOLD,
             track_buffer=settings.TRACK_BUFFER,
         )
-        counter = CountingState(lanes)
-        renderer = FrameRenderer(lanes, settings_obj=settings)
+        counter = CountingState(lanes_processing)
+        renderer = FrameRenderer(lanes_processing, settings_obj=settings)
 
         # Stabilisation reference frame
         if settings.AI_ENABLE_STABILIZATION:
@@ -218,7 +236,7 @@ def process_video(task_id: str, video_url: str, lane_config: dict, callback_url:
         processed = 0
         last_progress = 15
         last_detections = []
-        frame_skip = settings.AI_FRAME_SKIP
+        frame_skip = max(1, int(settings.AI_FRAME_SKIP or 1))
         pending_future = None
         pending_submitted_at = None
         pending_frame_idx = None

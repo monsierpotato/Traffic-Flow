@@ -1,0 +1,330 @@
+{
+  "version": 1,
+  "camera_id": "camera_01",
+  "created_at": "2026-07-11T15:13:10.975243+00:00",
+  "resolution": {
+    "width": 960,
+    "height": 540
+  },
+  "method": "counting_gate",
+  "settings": {
+    "movement_threshold_px": 5,
+    "cooldown_frames": 12,
+    "cooldown_distance_px": 32,
+    "zone_policy": "flexible"
+  },
+  "lanes": [
+    {
+      "lane_id": "1",
+      "valid_zone": [
+        [
+          481,
+          106
+        ],
+        [
+          342,
+          457
+        ],
+        [
+          536,
+          460
+        ],
+        [
+          540,
+          106
+        ]
+      ],
+      "counting_line": [
+        [
+          387,
+          346
+        ],
+        [
+          537,
+          351
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          490,
+          187
+        ],
+        [
+          456,
+          388
+        ]
+      ]
+    },
+    {
+      "lane_id": "2",
+      "valid_zone": [
+        [
+          541,
+          106
+        ],
+        [
+          536,
+          458
+        ],
+        [
+          729,
+          443
+        ],
+        [
+          593,
+          108
+        ]
+      ],
+      "counting_line": [
+        [
+          537,
+          353
+        ],
+        [
+          694,
+          351
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          589,
+          214
+        ],
+        [
+          613,
+          377
+        ]
+      ]
+    },
+    {
+      "lane_id": "3",
+      "valid_zone": [
+        [
+          593,
+          109
+        ],
+        [
+          731,
+          443
+        ],
+        [
+          878,
+          378
+        ],
+        [
+          645,
+          104
+        ]
+      ],
+      "counting_line": [
+        [
+          694,
+          352
+        ],
+        [
+          817,
+          308
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          702,
+          237
+        ],
+        [
+          776,
+          352
+        ]
+      ]
+    },
+    {
+      "lane_id": "4",
+      "valid_zone": [
+        [
+          659,
+          87
+        ],
+        [
+          924,
+          333
+        ],
+        [
+          950,
+          274
+        ],
+        [
+          701,
+          96
+        ]
+      ],
+      "counting_line": [
+        [
+          700,
+          125
+        ],
+        [
+          724,
+          115
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          737,
+          142
+        ],
+        [
+          699,
+          106
+        ]
+      ]
+    },
+    {
+      "lane_id": "5",
+      "valid_zone": [
+        [
+          706,
+          96
+        ],
+        [
+          943,
+          266
+        ],
+        [
+          947,
+          229
+        ],
+        [
+          751,
+          96
+        ]
+      ],
+      "counting_line": [
+        [
+          738,
+          116
+        ],
+        [
+          771,
+          113
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          774,
+          127
+        ],
+        [
+          740,
+          104
+        ]
+      ]
+    },
+    {
+      "lane_id": "6",
+      "valid_zone": [
+        [
+          753,
+          98
+        ],
+        [
+          945,
+          227
+        ],
+        [
+          950,
+          177
+        ],
+        [
+          789,
+          84
+        ]
+      ],
+      "counting_line": [
+        [
+          783,
+          116
+        ],
+        [
+          814,
+          99
+        ]
+      ],
+      "class_allowed": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "direction": [
+        [
+          824,
+          124
+        ],
+        [
+          783,
+          100
+        ]
+      ]
+    }
+  ],
+  "annotation_roi": {
+    "type": "rectangle",
+    "x": 297,
+    "y": 12,
+    "width": 660,
+    "height": 520,
+    "purpose": "frontend_annotation_only"
+  },
+  "roi_polygon": [
+    [
+      518,
+      22
+    ],
+    [
+      297,
+      532
+    ],
+    [
+      954,
+      526
+    ],
+    [
+      957,
+      174
+    ],
+    [
+      625,
+      12
+    ]
+  ]
+}

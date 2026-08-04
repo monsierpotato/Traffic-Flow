@@ -1,0 +1,1 @@
+{"tracks": 52, "classes": {"car": 49, "truck": 2, "bus": 1}, "sample": [{"tid": 1, "class": "car", "frames": 5}, {"tid": 2, "class": "car", "frames": 72}, {"tid": 3, "class": "car", "frames": 105}, {"tid": 4, "class": "car", "frames": 132}, {"tid": 5, "class": "car", "frames": 151}]}

@@ -1,0 +1,4 @@
+bucket,tracker,hota,deta,assa,idf1,id_switches,fragmentations,mostly_tracked,mostly_lost,notes
+development,iou_frame,0.999936,0.999991,0.999882,0.999949,5,0,1357,0,Selected on development under oracle detections
+development,trafficflow_kalman,0.807351,0.831976,0.789103,0.892666,104,206,1299,3,Production-style Kalman output is less suitable when oracle GT detections are already exact
+held_out_test,iou_frame,1.000000,1.000000,1.000000,1.000000,0,0,509,0,Held-out run executed once after development selection

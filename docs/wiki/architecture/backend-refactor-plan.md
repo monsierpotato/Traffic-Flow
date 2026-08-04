@@ -111,7 +111,7 @@ Move root `trafficflow/` → `backend/` to resolve namespace collision:
 
 ## Links
 - [[Production Architecture]]
-- [[AI Core Integration Guide]]
+- [[ai-core-integration|AI Core Integration Guide]]
 - [[Runtime Engine]]
 - [[Project Backlog]]
 - [[Decision Log]]

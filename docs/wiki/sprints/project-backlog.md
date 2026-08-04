@@ -136,7 +136,7 @@ Goal: harden the demo and deploy only if local is stable.
 - [[Production Architecture]]
 - [[ROI Annotation]]
 - [[Decision Log]]
-- [[Deploy AI Traffic Work Plan Source]]
+- [[deploy-ai-traffic-work-plan|Deploy AI Traffic Work Plan Source]]
 
 ## Video Upload / Normalization Policy
 

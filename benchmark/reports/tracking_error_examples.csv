@@ -1,0 +1,4 @@
+bucket,tracker,sequence_id,frame_num,gt_track_id,previous_pred_track_id,current_pred_track_id,iou,issue_type,note
+development,iou_frame,MVI_40752,272,28,25,26,1.000,IDSW,Single development ID switch from TrackEval-style frame matching
+development,trafficflow_kalman,MVI_20012,469,3,2,15,0.717,IDSW,Kalman tracker changed predicted identity for the same GT vehicle
+development,trafficflow_kalman,MVI_20012,375,30,12,12,,Frag,GT track reappeared after a gap in matched frames

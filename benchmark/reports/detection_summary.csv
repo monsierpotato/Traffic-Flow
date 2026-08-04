@@ -1,0 +1,6 @@
+run_id,bucket,model,imgsz,precision,recall,f1,ap50,ap50_95,false_positives_per_frame,false_negatives_per_frame,latency_ms_p50,latency_ms_p95,peak_vram_mb,sampled_frames
+phase04-dev-model-comparison-docker-gpu-20260718-development-yolo11m,development,yolo11m.pt,640,0.693860,0.758272,0.724638,0.568002,0.421930,2.778626,2.007634,15.615,17.983,185,131
+phase04-dev-model-comparison-docker-gpu-20260718-development-yolov8n,development,yolov8n.pt,640,0.682739,0.650735,0.666353,0.514722,0.359476,2.511450,2.900763,13.496,16.688,185,131
+phase04-dev-model-comparison-docker-gpu-20260718-development-yolov8s,development,yolov8s.pt,640,0.595730,0.769301,0.671480,0.549994,0.406145,4.335878,1.916031,13.722,16.378,185,131
+phase04-dev-model-comparison-docker-gpu-20260718-development-yolov8m,development,yolov8m.pt,640,0.618505,0.798713,0.697152,0.595037,0.435249,4.091603,1.671756,14.779,18.468,236,131
+phase04-heldout-yolov8m-docker-gpu-20260718-held_out_test-yolov8m,held_out_test,yolov8m.pt,640,0.706717,0.679091,0.692629,0.582020,0.446275,3.647059,4.152941,15.377,17.918,160,85

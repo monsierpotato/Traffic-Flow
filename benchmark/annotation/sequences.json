@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "sequences": [
+    {
+      "sequence_id": "YT_sJvEFrG0wq0_live",
+      "bucket": "phase08_live",
+      "frame": "frames/YT_sJvEFrG0wq0_live.jpg",
+      "resolution": {
+        "width": 1920,
+        "height": 1080
+      },
+      "source_url": "https://youtu.be/sJvEFrG0wq0",
+      "source_type": "youtube_hls",
+      "geometry_output": "../configs/geometry_live/YT_sJvEFrG0wq0_live.json"
+    },
+    {
+      "sequence_id": "MVI_20011",
+      "bucket": "smoke_test",
+      "frame": "frames/MVI_20011.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_20011.json"
+    },
+    {
+      "sequence_id": "MVI_20012",
+      "bucket": "development",
+      "frame": "frames/MVI_20012.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_20012.json"
+    },
+    {
+      "sequence_id": "MVI_20035",
+      "bucket": "development",
+      "frame": "frames/MVI_20035.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_20035.json"
+    },
+    {
+      "sequence_id": "MVI_40241",
+      "bucket": "development",
+      "frame": "frames/MVI_40241.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40241.json"
+    },
+    {
+      "sequence_id": "MVI_40213",
+      "bucket": "development",
+      "frame": "frames/MVI_40213.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40213.json"
+    },
+    {
+      "sequence_id": "MVI_40752",
+      "bucket": "development",
+      "frame": "frames/MVI_40752.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40752.json"
+    },
+    {
+      "sequence_id": "MVI_40963",
+      "bucket": "development",
+      "frame": "frames/MVI_40963.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40963.json"
+    },
+    {
+      "sequence_id": "MVI_63553",
+      "bucket": "development",
+      "frame": "frames/MVI_63553.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_63553.json"
+    },
+    {
+      "sequence_id": "MVI_41063",
+      "bucket": "development",
+      "frame": "frames/MVI_41063.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_41063.json"
+    },
+    {
+      "sequence_id": "MVI_40892",
+      "bucket": "held_out_test",
+      "frame": "frames/MVI_40892.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40892.json"
+    },
+    {
+      "sequence_id": "MVI_39401",
+      "bucket": "held_out_test",
+      "frame": "frames/MVI_39401.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_39401.json"
+    },
+    {
+      "sequence_id": "MVI_40793",
+      "bucket": "held_out_test",
+      "frame": "frames/MVI_40793.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40793.json"
+    },
+    {
+      "sequence_id": "MVI_40854",
+      "bucket": "held_out_test",
+      "frame": "frames/MVI_40854.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40854.json"
+    },
+    {
+      "sequence_id": "MVI_40761",
+      "bucket": "held_out_test",
+      "frame": "frames/MVI_40761.jpg",
+      "resolution": {
+        "width": 960,
+        "height": 540
+      },
+      "geometry_output": "../configs/geometry_manual/MVI_40761.json"
+    }
+  ]
+}

@@ -1,0 +1,338 @@
+[
+  {
+    "sequence_id": "MVI_20011",
+    "path": "benchmark/configs/geometry_manual/MVI_20011.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_20011",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_20011",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_20012",
+    "path": "benchmark/configs/geometry_manual/MVI_20012.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_20012",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_20012",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_20035",
+    "path": "benchmark/configs/geometry_manual/MVI_20035.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_20035",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_20035",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_39401",
+    "path": "benchmark/configs/geometry_manual/MVI_39401.json",
+    "lane_count": 3,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_39401",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_39401",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_39401",
+        "lane_id": "lane_3",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40213",
+    "path": "benchmark/configs/geometry_manual/MVI_40213.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40213",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40213",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40241",
+    "path": "benchmark/configs/geometry_manual/MVI_40241.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40241",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40241",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40752",
+    "path": "benchmark/configs/geometry_manual/MVI_40752.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40752",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40752",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40761",
+    "path": "benchmark/configs/geometry_manual/MVI_40761.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40761",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40761",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40793",
+    "path": "benchmark/configs/geometry_manual/MVI_40793.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40793",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40793",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40854",
+    "path": "benchmark/configs/geometry_manual/MVI_40854.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40854",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40854",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40892",
+    "path": "benchmark/configs/geometry_manual/MVI_40892.json",
+    "lane_count": 1,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40892",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_40963",
+    "path": "benchmark/configs/geometry_manual/MVI_40963.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_40963",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_40963",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_41063",
+    "path": "benchmark/configs/geometry_manual/MVI_41063.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_41063",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_41063",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "sequence_id": "MVI_63553",
+    "path": "benchmark/configs/geometry_manual/MVI_63553.json",
+    "lane_count": 2,
+    "issue_count": 0,
+    "warning_count": 0,
+    "fix_count": 0,
+    "lanes": [
+      {
+        "sequence_id": "MVI_63553",
+        "lane_id": "lane_1",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      },
+      {
+        "sequence_id": "MVI_63553",
+        "lane_id": "lane_2",
+        "issues": [],
+        "warnings": [],
+        "fixes": []
+      }
+    ]
+  }
+]

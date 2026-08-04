@@ -46,16 +46,16 @@ class TestConfig:
         s = Settings(_env_file=None)
         # With env vars set, MONGODB_DB_NAME will be overridden to "trafficflow_test"
         assert s.MAX_FILE_SIZE_MB in (50, 1024, 2048)
-        assert s.AI_FRAME_SKIP in (2, 2)
+        assert s.AI_FRAME_SKIP in (1, 1)
         assert s.AI_RESIZE_DIM in (640, 640)
         assert s.AI_ENABLE_STABILIZATION is False
-        assert s.TRACK_MATCH_THRESHOLD in (0.5, 0.5)
-        assert s.TRACK_BUFFER in (30, 30)
-        assert s.AI_FRAME_SKIP == 2
+        assert s.TRACK_MATCH_THRESHOLD in (0.3, 0.3)
+        assert s.TRACK_BUFFER in (8, 8)
+        assert s.AI_FRAME_SKIP == 1
         assert s.AI_RESIZE_DIM == 640
         assert s.AI_ENABLE_STABILIZATION is False
-        assert s.TRACK_MATCH_THRESHOLD == 0.5
-        assert s.TRACK_BUFFER == 30
+        assert s.TRACK_MATCH_THRESHOLD == 0.3
+        assert s.TRACK_BUFFER == 8
         assert s.STORE_ORIGINAL_VIDEO is False
         assert s.VIDEO_TRANSCODE_CRF == 20
 
@@ -248,6 +248,13 @@ class TestPipelineImports:
     def test_inference_client_imports(self):
         from worker.pipeline.ai_client import InferenceClient
         assert InferenceClient is not None
+
+    def test_local_class_id_parser(self):
+        from worker.pipeline.local_client import _parse_class_ids
+
+        assert _parse_class_ids("2,3,5,7") == [2, 3, 5, 7]
+        assert _parse_class_ids("") is None
+        assert _parse_class_ids("car") is None
 
     def test_frame_processor_imports(self):
         from worker.pipeline.processor import FrameProcessor
